@@ -382,61 +382,93 @@ def scrape_single_domain(domain):
 
     phones = set()
     whatsapp_links = set()
+    emails = set()
 
-    wa_json = re.findall(r'"whatsapp":\s*"([^"]+)"', html_content, re.IGNORECASE)
-    phone_json = re.findall(r'"phone":\s*"([^"]+)"|"mobile":\s*"([^"]+)"', html_content, re.IGNORECASE)
-
-    for w in wa_json:
-        if w.strip():
-            cp = clean_phone(w.strip())
-            if is_valid_phone(cp):
-                phones.add(cp)
-                whatsapp_links.add(f"https://wa.me/{cp.replace('+', '')}")
-
-    for p_tuple in phone_json:
-        for p in p_tuple:
-            if p.strip():
-                cp = clean_phone(p.strip())
+    def extract_from_html(html_str):
+        soup_obj = BeautifulSoup(html_str, 'html.parser')
+        
+        wa_json = re.findall(r'"whatsapp":\s*"([^"]+)"', html_str, re.IGNORECASE)
+        phone_json = re.findall(r'"phone":\s*"([^"]+)"|"mobile":\s*"([^"]+)"', html_str, re.IGNORECASE)
+        for w in wa_json:
+            if w.strip():
+                cp = clean_phone(w.strip())
                 if is_valid_phone(cp):
                     phones.add(cp)
+                    whatsapp_links.add(f"https://wa.me/{cp.replace('+', '')}")
 
-    links = [a.get('href') for a in soup.find_all('a', href=True)]
-    for link in links:
-        if link.startswith('tel:'):
-            p = clean_phone(link.replace('tel:', '').strip())
-            if is_valid_phone(p):
-                phones.add(p)
-        if any(w in link.lower() for w in ['wa.me', 'api.whatsapp.com', 'whatsapp://', 'chat.whatsapp.com']):
-            if not '${' in link and not 'undefined' in link:
-                whatsapp_links.add(link)
-                wa_match = re.search(r'(?:\+?966|00966|0)?5\d{8,9}\b', link)
-                if wa_match:
-                    cp = clean_phone(wa_match.group(0))
-                    if is_valid_phone(cp):
-                        phones.add(cp)
+        for p_tuple in phone_json:
+            for p in p_tuple:
+                if p.strip():
+                    cp = clean_phone(p.strip())
+                    if is_valid_phone(cp): phones.add(cp)
 
-    soup_clean = BeautifulSoup(html_content, 'html.parser')
-    for element in soup_clean(["script", "style", "head", "noscript"]):
-        element.extract()
-    visible_text = soup_clean.get_text()
+        a_tags = [a for a in soup_obj.find_all('a', href=True)]
+        for a in a_tags:
+            link = a.get('href', '')
+            if link.startswith('tel:'):
+                p = clean_phone(link.replace('tel:', '').strip())
+                if is_valid_phone(p): phones.add(p)
+            if any(w in link.lower() for w in ['wa.me', 'api.whatsapp.com', 'whatsapp://', 'chat.whatsapp.com']):
+                if not '${' in link and not 'undefined' in link:
+                    whatsapp_links.add(link)
+                    wa_match = re.search(r'(?:\+?966|00966|0)?5\d{8,9}\b', link.replace('-','').replace(' ',''))
+                    if wa_match:
+                        cp = clean_phone(wa_match.group(0))
+                        if is_valid_phone(cp): phones.add(cp)
+            if link.startswith('mailto:'):
+                emails.add(link.replace('mailto:', '').split('?')[0].strip())
 
-    raw_mobiles = re.findall(r'(?:\+?966|00966|0)?5\d{8,9}\b', visible_text)
-    raw_unified = re.findall(r'\b9200\d{5}\b', visible_text)
-    raw_tollfree = re.findall(r'\b800\d{6,7}\b', visible_text)
+        for element in soup_obj(["script", "style", "head", "noscript"]):
+            element.extract()
+        visible_text = soup_obj.get_text()
 
-    for p in raw_mobiles + raw_unified + raw_tollfree:
-        cp = clean_phone(p)
-        if is_valid_phone(cp):
-            phones.add(cp)
+        # Advanced regex with flexible separators
+        sep = r'[\s\-.\(\)\/]*'
+        mobile_pattern = r'(?:\+?966|00966|0)?' + sep + r'5(?:' + sep + r'\d){8}\b'
+        unified_pattern = r'\b9200(?:' + sep + r'\d){5}\b'
+        tollfree_pattern = r'\b800(?:' + sep + r'\d){6,7}\b'
 
-    emails = set()
-    for link in links:
-        if link.startswith('mailto:'):
-            emails.add(link.replace('mailto:', '').split('?')[0].strip())
-    email_matches = re.findall(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', visible_text)
-    for em in email_matches:
-        if not em.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.css', '.js', '.woff', '.ttf')):
-            emails.add(em)
+        raw_phones = re.findall(mobile_pattern, visible_text) + \
+                     re.findall(unified_pattern, visible_text) + \
+                     re.findall(tollfree_pattern, visible_text)
+
+        for p in raw_phones:
+            cp = clean_phone(p)
+            if is_valid_phone(cp): phones.add(cp)
+
+        email_matches = re.findall(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', visible_text)
+        for em in email_matches:
+            if not em.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.css', '.js', '.woff', '.ttf')):
+                # Filter false positive emails
+                if not re.search(r'\.{2,}|@.*@|\.\w{1}$|^test@|^admin@|^example@|^fake@', em.lower()):
+                    emails.add(em)
+                    
+        return a_tags
+
+    # 1. Scrape Homepage
+    links = extract_from_html(html_content)
+
+    # 2. Contact Page Detection (Fallback)
+    if len(phones) == 0 or len(emails) == 0:
+        contact_urls = set()
+        for a in links:
+            href = a.get('href', '').lower()
+            text_val = a.get_text().lower()
+            if any(k in href or k in text_val for k in ['contact', 'اتصل', 'تواصل', 'reach']):
+                if href.startswith('http') and domain in href:
+                    contact_urls.add(href)
+                elif href.startswith('/'):
+                    contact_urls.add(f"https://{domain}{href}")
+        
+        if not contact_urls:
+            contact_urls.add(f"https://{domain}/contact-us")
+            contact_urls.add(f"https://{domain}/pages/contact-us")
+            contact_urls.add(f"https://{domain}/اتصل-بنا")
+            
+        for curl in list(contact_urls)[:2]:
+            c_res = fetch_url(curl)
+            if c_res and c_res.status_code == 200:
+                extract_from_html(c_res.text)
 
     social_map = {
         'فيسبوك': ['facebook.com', 'fb.com'],
@@ -446,7 +478,8 @@ def scrape_single_domain(domain):
         'سناب شات': ['snapchat.com']
     }
     found_socials = {k: set() for k in social_map}
-    for link in links:
+    for a in links:
+        link = a.get('href', '')
         l_lower = link.lower()
         for platform, domains in social_map.items():
             if any(d in l_lower for d in domains):
