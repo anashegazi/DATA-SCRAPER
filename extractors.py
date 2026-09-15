@@ -293,8 +293,9 @@ def extract_emails(raw_html: str, soup: BeautifulSoup) -> set:
             emails.add(dec)
 
     # تمويه نصي: info [at] site [dot] com
-    deobf = re.sub(r'\s*[\[\(]?\s*(at|@|أت)\s*[\]\)]?\s*', '@', raw, flags=re.I)
-    deobf = re.sub(r'\s*[\[\(]?\s*(dot|نقطة)\s*[\]\)]?\s*', '.', deobf, flags=re.I)
+    visible_text = soup.get_text(separator=' ')
+    deobf = re.sub(r'\s*[\[\(]?\s*\b(at|أت)\b\s*[\]\)]?\s*', '@', visible_text, flags=re.I)
+    deobf = re.sub(r'\s*[\[\(]?\s*\b(dot|نقطة)\b\s*[\]\)]?\s*', '.', deobf, flags=re.I)
 
     for blob in (raw, deobf):
         for em in re.findall(EMAIL_RE, blob):
