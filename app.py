@@ -23,9 +23,14 @@ RESULTS_FILE = 'partial_results.jsonl'
 _lock = threading.Lock()
 
 # ── ضبط سرعة وأداء الفحص ──
-CHUNK_SIZE = 25        # عدد الدومينات في كل دفعة
-MAX_WORKERS = 15       # عدد العمال المتزامنين
+MAX_WORKERS = 20       # عدد العمال المتزامنين
 REQUEST_TIMEOUT = (2.5, 3.5)  # مهلة الطلب (اتصال 2.5 ثانية، قراءة 3.5 ثانية)
+
+def normalize_domain(url):
+    url = str(url).strip()
+    url = re.sub(r'^https?://', '', url, flags=re.I)
+    url = url.split('/')[0].strip(' .')
+    return url.lower()
 
 def _save_row(row):
     with _lock:
@@ -40,7 +45,10 @@ def _load_done():
                 line = line.strip()
                 if line:
                     try:
-                        rows.append(json.loads(line))
+                        r = json.loads(line)
+                        if 'الموقع (Domain)' in r:
+                            r['الموقع (Domain)'] = normalize_domain(r['الموقع (Domain)'])
+                        rows.append(r)
                     except Exception:
                         continue
     return rows
@@ -335,14 +343,14 @@ def fetch_url(url, retries=1):
             res = session.get(url, timeout=REQUEST_TIMEOUT, allow_redirects=True)
             if res is None:
                 continue
-            # fast-fail: Cloudflare challenge → مفيش داعي نجرب باقي الصيغ
+            # fast-fail: Cloudflare challenge → تخطي فوري للدومين بالكامل
             if res.status_code in (403, 429, 503):
                 server = (res.headers.get('Server') or '').lower()
                 cfm = (res.headers.get('cf-mitigated') or '').lower()
-                head = (res.text or '')[:300]
-                if 'cloudflare' in server or cfm == 'yes' or 'just a moment' in head.lower():
-                    return None
-            if len(res.text) > 300:
+                head = (res.text or '')[:300].lower()
+                if 'cloudflare' in server or cfm == 'yes' or 'just a moment' in head:
+                    return 'CLOUDFLARE_BLOCKED'
+            if res.status_code == 200 and len(res.text) > 300:
                 return res
         except Exception:
             pass
@@ -422,7 +430,8 @@ with tab1:
                 df_in = pd.read_excel(uploaded_file)
             
             first_col = df_in.iloc[:, 0].dropna().astype(str).tolist()
-            domain_list = [d.strip() for d in first_col if d.strip()]
+            domain_list = [normalize_domain(d) for d in first_col if normalize_domain(d)]
+            domain_list = list(dict.fromkeys(domain_list))
             st.success(f"✓ تم تجهيز {len(domain_list)} موقع للبدء الفوري")
         except Exception as e:
             st.error(f"خطأ في قراءة الملف: {e}")
@@ -431,13 +440,13 @@ with tab2:
     text_input = st.text_area("أدخل قائمة الروابط (رابط في كل سطر):", height=150, placeholder="villagemarket.com.sa\nmathaqshafi.com\nwtr.sa")
     if text_input:
         lines = text_input.splitlines()
-        domain_list = [l.strip() for l in lines if l.strip()]
+        domain_list = [normalize_domain(l) for l in lines if normalize_domain(l)]
+        domain_list = list(dict.fromkeys(domain_list))
 
 if domain_list:
-    domain_list = [d.strip() for d in domain_list if d and d.strip()]
     total = len(domain_list)
 
-    # ── حالة الجلسة: تعيش عبر الـ reruns وتتوهج عند إعادة فتح المتصفح ──
+    # ── حالة الجلسة: تعيش عبر الـ reruns ──
     if "domains_queue" not in st.session_state:
         st.session_state.domains_queue = []
         st.session_state.done_domains = set()
@@ -451,34 +460,38 @@ if domain_list:
         st.session_state.scan_started = True
         st.rerun()
 
-    # ── المحرك الآلي: chunk واحد لكل rerun — يريّح الاتصال ويحدّث الـ UI فعلياً ──
+    # ── المحرك الآلي: فحص متوازي وتحديث مباشر لعداد التقدم لكل موقع ──
     if st.session_state.scan_started and st.session_state.domains_queue:
         queue = st.session_state.domains_queue
         done = st.session_state.done_domains
-        processed_so_far = sum(1 for d in queue if d in done)
-
-        st.progress(min(processed_so_far / total, 1.0))
-        st.markdown(f"**تم فحص {processed_so_far} من {total}**")
-
         pending = [d for d in queue if d not in done]
+        total = len(queue)
+
+        progress_bar = st.progress(min(len(done) / total, 1.0) if total else 0.0)
+        status_box = st.empty()
+
         if pending:
-            chunk = pending[:CHUNK_SIZE]
-            with st.spinner(f"جاري فحص {processed_so_far + 1} إلى {min(processed_so_far + len(chunk), total)}..."):
-                # with pool عادي جوه الـ chunk = لا threads معلقة بعد الختام (لا leak)
-                with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-                    futures = {executor.submit(scrape_single_domain, d): d for d in chunk}
-                    for future in concurrent.futures.as_completed(futures):
-                        d = futures[future]
-                        try:
-                            res = future.result()
-                        except Exception:
-                            res = error_row(d)
-                        _save_row(res)  # يتخزن فوراً — لو الات عيط مفيش حاجة بتضيع
-                        done.add(d)
-            st.rerun()   # نفَس جديد للـ WebSocket — هون سر التغلب على idle timeout
+            status_box.markdown(f"**⚡ جاري الفحص المتوازي... (تم إنجاز {len(done)} من {total})**")
+            with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                futures = {executor.submit(scrape_single_domain, d): d for d in pending}
+                for future in concurrent.futures.as_completed(futures):
+                    d = futures[future]
+                    try:
+                        res = future.result()
+                    except Exception:
+                        res = error_row(d)
+                    _save_row(res)
+                    done.add(d)
+                    count_done = len(done)
+                    progress_bar.progress(min(count_done / total, 1.0))
+                    status_box.markdown(f"**⚡ المكتمل: {count_done} / {total} موقع | أحدث موقع: `{d}`**")
+            st.session_state.scan_started = False
+            st.balloons()
+            st.success(f"🎉 اكتمل فحص واكتشاف {len(done)} موقع بنجاح!")
+            st.rerun()
         else:
             st.balloons()
-            st.success(f"🎉 اكتمل فحص واكتشاف {processed_so_far} موقع بنجاح!")
+            st.success(f"🎉 تم فحص جميع المواقع ({len(done)} من {total}) مسبقاً!")
 
 # ---------------------------------------------------------------------------
 # عرض النتائج المحفوظة (من الجلسة الحالية أو الجلسات السابقة — من القرص)
@@ -505,5 +518,7 @@ if saved_rows:
             with _lock:
                 if os.path.exists(RESULTS_FILE):
                     os.remove(RESULTS_FILE)
-            st.session_state['partial_results'] = []
+            st.session_state.done_domains = set()
+            st.session_state.scan_started = False
             st.success("تم مسح النتائج المحفوظة — يلا من الأول.")
+            st.rerun()

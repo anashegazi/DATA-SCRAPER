@@ -64,11 +64,11 @@ def fetch_url(url):
         res = session.get(url, timeout=TIMEOUT, allow_redirects=True)
         if res is None:
             return None
-        # Cloudflare JS challenge: "Just a moment..." لا يمكن تجاوزه بـ requests
+        # Cloudflare JS challenge: "Just a moment..."
         if res.status_code in (403, 429, 503):
             ct = res.headers.get('Server', '').lower()
             if 'cloudflare' in ct or 'Just a moment' in (res.text[:200] if res.text else ''):
-                return None
+                return 'CLOUDFLARE_BLOCKED'
         if res.status_code == 200 and len(res.text) > 300:
             return res
     except Exception:

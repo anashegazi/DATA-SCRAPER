@@ -392,9 +392,14 @@ def harvest_domain(domain: str, fetch_url, max_pages: int = 5, parallel: bool = 
     else:
         for url in candidates:
             res = fetch_url(url)
-            if res is not None and res.status_code == 200:
+            if res == 'CLOUDFLARE_BLOCKED':
+                bucket['title'] = 'محظور (حماية Cloudflare)'
+                bucket['platform'] = 'غير معروف (Cloudflare)'
+                bucket['active'] = False
+                return bucket
+            if res is not None and getattr(res, 'status_code', None) == 200:
                 break
-    if res is None:
+    if res is None or res == 'CLOUDFLARE_BLOCKED':
         return bucket
 
     bucket['active'] = True
@@ -426,11 +431,14 @@ def harvest_domain(domain: str, fetch_url, max_pages: int = 5, parallel: bool = 
 
     absorb(home_html)
 
-    # ← ده اللي كان ناقص: نجمع من الصفحات الداخلية كمان (مش الأرقام بس)
-    for page_url in discover_pages(home_soup, domain, limit=max_pages):
-        page = fetch_url(page_url)
-        if page is not None and page.status_code == 200:
-            absorb(page.text)
+    # جلب الصفحات الداخلية بالتوازي لتوفير الوقت
+    inner_urls = discover_pages(home_soup, domain, limit=max_pages)
+    if inner_urls:
+        import concurrent.futures as _cf
+        with _cf.ThreadPoolExecutor(max_workers=min(len(inner_urls), 5)) as _inner_ex:
+            for page in _inner_ex.map(fetch_url, inner_urls):
+                if page is not None and getattr(page, 'status_code', None) == 200:
+                    absorb(page.text)
 
     return bucket
 
