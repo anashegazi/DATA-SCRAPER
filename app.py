@@ -29,9 +29,8 @@ USER_AGENTS = [
 ]
 
 # ── ضبط سرعة وأداء الفحص ──
-MAX_WORKERS = 6          # عدد العمال المتزامنين المناسب لعدم إثارة حماية Cloudflare (429)
-CHUNK_SIZE = 10          # حجم الدفعة لكل تحديث شاشة وتنشيط الاتصال
-REQUEST_TIMEOUT = (3.0, 5.0)  # مهلة الطلب (اتصال 3 ثواني، قراءة 5 ثواني)
+MAX_WORKERS = 6               # عدد العمال المتزامنين المناسب لعدم إثارة حماية Cloudflare (429)
+REQUEST_TIMEOUT = (2.5, 4.0)  # مهلة الطلب (اتصال 2.5 ثانية، قراءة 4 ثواني)
 
 def normalize_domain(url):
     url = str(url).strip()
@@ -400,7 +399,7 @@ if domain_list:
         st.session_state.scan_started = True
         st.rerun()
 
-    # ── المحرك الآلي: معالجة بنظام الدفعات (Chunks) وتحديث حي ومباشر للـ UI ──
+    # ── المحرك الآلي: فحص متوازي مستمر بدون إعادة تحميل للصفحة (مستقر وسريع على السحابة) ──
     if st.session_state.scan_started and st.session_state.domains_queue:
         queue = st.session_state.domains_queue
         done = st.session_state.done_domains
@@ -413,13 +412,10 @@ if domain_list:
         status_box = st.empty()
 
         if pending:
-            chunk = pending[:CHUNK_SIZE]
-            chunk_start = completed_count + 1
-            chunk_end = min(completed_count + len(chunk), total)
-            status_box.markdown(f"**⚡ جاري فحص المواقع ({chunk_start} إلى {chunk_end} من أصل {total})...**")
+            status_box.markdown(f"**⚡ جاري الفحص المتوازي لـ {len(pending)} موقع متبقي (تم إنجاز {completed_count} من {total})...**")
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-                futures = {executor.submit(scrape_single_domain, d): d for d in chunk}
+                futures = {executor.submit(scrape_single_domain, d): d for d in pending}
                 for future in concurrent.futures.as_completed(futures):
                     d = futures[future]
                     try:
@@ -430,15 +426,18 @@ if domain_list:
                     done.add(d)
                     count_done = len(done)
                     progress_bar.progress(min(count_done / total, 1.0))
-                    status_box.markdown(f"**⚡ المكتمل: {count_done} / {total} موقع | تم فحص: `{d}` — جاري معالجة التالي...**")
+                    status_box.markdown(f"**⚡ المكتمل: {count_done} / {total} موقع | تم فحص: `{d}`**")
 
-            # تحديث الواجهة تلقائياً للدفعة التالية (يمنع انقطاع الاتصال وتجمد المتصفح)
-            st.rerun()
-        else:
             st.session_state.scan_started = False
             status_box.markdown(f"**✅ اكتمل الفحص بالكامل ({total} موقع)!**")
             st.balloons()
             st.success(f"🎉 تم استخراج واكتشاف بيانات {total} موقع بنجاح!")
+            st.rerun()
+        else:
+            st.session_state.scan_started = False
+            status_box.markdown(f"**✅ تم فحص جميع المواقع مسبقاً ({total} موقع)!**")
+            st.balloons()
+            st.success(f"🎉 جميع المواقع مفحوصة ومحفوظة مسبقاً!")
 
 # ---------------------------------------------------------------------------
 # عرض النتائج المحفوظة (من الجلسة الحالية أو الجلسات السابقة — من القرص)
