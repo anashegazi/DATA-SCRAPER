@@ -126,8 +126,11 @@ def extract_phones(raw_html: str, soup: BeautifulSoup) -> set:
             add(re.sub(r'^(tel|callto|sms):', '', href, flags=re.I))
 
     # (ب) attributes مخصصة
+    SKIP_META = ('description', 'og:description', 'twitter:description', 'keywords')
     for attr in ('data-phone', 'data-tel', 'data-number', 'data-whatsapp', 'content'):
         for el in soup.find_all(attrs={attr: True}):
+            if el.name == 'meta' and (el.get('name') or el.get('property') or '').lower() in SKIP_META:
+                continue  # أرقام مخبأة في وصف الميتا غالباً غير ظاهرة للزوار
             val = normalize_digits(str(el.get(attr)))
             if re.search(r'\d{7,}', val):
                 add(val)
@@ -146,6 +149,9 @@ def extract_phones(raw_html: str, soup: BeautifulSoup) -> set:
 
     # (هـ) السكريبتات نفسها كنص خام
     scripts_text = " ".join(s.get_text() for s in soup_txt.find_all('script'))
+    # أرقام مخبأة في حقول الوصف (JSON-LD description) غالباً غير ظاهرة للزوار
+    scripts_text = re.sub(r'"(?:description|og:description|twitter:description|keywords)"\s*:\s*"(?:\\.|[^"\\])*"',
+                          '', scripts_text, flags=re.I)
 
     for blob in (text_glued, text_spaced, scripts_text):
         for pat in PHONE_PATTERNS:
