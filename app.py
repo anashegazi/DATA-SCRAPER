@@ -301,7 +301,7 @@ def fetch_url(url, retries=1):
 
 def scrape_single_domain(domain):
     domain = domain.strip().replace('https://', '').replace('http://', '').split('/')[0]
-    bucket = harvest_domain(domain, fetch_url, max_pages=2)
+    bucket = harvest_domain(domain, fetch_url, max_pages=5)
     row = bucket_to_row(domain, bucket)
 
     rank = get_tranco_rank(domain) if bucket['active'] else None
