@@ -9,11 +9,54 @@ import concurrent.futures
 import time
 import random
 import io
+import os
+import threading
 import openpyxl
 import urllib3
 from extractors import harvest_domain, bucket_to_row, SOCIAL_NETWORKS
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# ---------------------------------------------------------------------------
+# Resume persistence — النتائج بتتحفظ على القرص وباينة حتى بعد موت الـ process
+# ---------------------------------------------------------------------------
+RESULTS_FILE = 'partial_results.jsonl'
+_lock = threading.Lock()
+
+def _save_row(row):
+    with _lock:
+        with open(RESULTS_FILE, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(row, ensure_ascii=False) + '\n')
+
+def _load_done():
+    rows = []
+    if os.path.exists(RESULTS_FILE):
+        with open(RESULTS_FILE, encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        rows.append(json.loads(line))
+                    except Exception:
+                        continue
+    return rows
+
+# ---------------------------------------------------------------------------
+# Thread-local Session — reuse اتصال واحد لكل thread بدل فتح واحد جديد لكل request
+# ---------------------------------------------------------------------------
+_local = threading.local()
+
+def _get_session():
+    if not hasattr(_local, 'session'):
+        s = requests.Session()
+        s.headers.update({
+            'User-Agent': random.choice(USER_AGENTS),
+            'Accept-Language': 'ar-SA,ar;q=0.9,en-US;q=0.8',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        })
+        s.verify = False
+        _local.session = s
+    return _local.session
 
 st.set_page_config(
     page_title="Scraper Pro — Minimalist Modern",
@@ -282,15 +325,10 @@ def is_valid_phone(phone):
     return False
 
 def fetch_url(url, retries=1):
+    session = _get_session()
     for attempt in range(retries):
-        headers = {
-            'User-Agent': random.choice(USER_AGENTS),
-            'Accept-Language': 'ar-SA,ar;q=0.9,en-US;q=0.8',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
-        }
         try:
-            res = requests.get(url, headers=headers, timeout=6,
-                               allow_redirects=True, verify=False)
+            res = session.get(url, timeout=6, allow_redirects=True)
             if res is not None and len(res.text) > 300:
                 return res
         except Exception:
@@ -382,78 +420,79 @@ with tab2:
 
 if domain_list:
     domain_list = [d.strip() for d in domain_list if d and d.strip()]
-    st.markdown(f"### ⚙️ الروابط المجهزة للبدء: **{len(domain_list)} موقع**")
-    if st.button("🚀 بدء الاستخراج التلقائي الان"):
-        progress_bar = st.progress(0)
+
+    # نحمّل اللي خلص قبل كده (استئناف بعد أي قطع/Mوتة)
+    saved_rows = _load_done()
+    done_domains = {r.get('الموقع (Domain)') for r in saved_rows}
+    pending = [d for d in domain_list if d not in done_domains]
+    total = len(domain_list)
+
+    resume_info = len(total) - len(pending)
+    if resume_info > 0:
+        st.info(f"⬅️ تم فحص {resume_info} موقع في الجلسة السابقة — هتستأنف من حيث وقفت.")
+
+    st.markdown(f"### ⚙️ الروابط المجهزة للبدء: **{total} موقع** ({len(pending)} متبقيين)")
+    if st.button("🚀 بدء الاستخراج التلقائي الان") and pending:
+        progress_bar = st.progress(len(done_domains) / total)
         status_text = st.empty()
         status_text.info("⏳ جاري تحضير المحركات والبدء في الفحص... يرجى الانتظار (قد يستغرق فحص الموقع الأول بضع ثوانٍ)")
 
-        results = []
-        total = len(domain_list)
+        completed = len(done_domains)
         max_workers = min(6, total)
+        batch_size = 15  # نتك في دفعات عشان متبقيش حاجة كبيرة بانتظار في الذاكرة
 
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
         try:
-            futures = {executor.submit(scrape_single_domain, dom): dom for dom in domain_list}
-            completed = 0
-            for future in concurrent.futures.as_completed(futures):
-                dom = futures[future]
-                try:
-                    res = future.result()
-                except Exception:
-                    res = error_row(dom)
-                results.append(res)
-                completed += 1
-                progress_bar.progress(completed / total)
-                status_text.markdown(f"**جاري فحص وتدقيق ({completed}/{total}) موقع...**")
+            for start in range(0, len(pending), batch_size):
+                batch = pending[start:start + batch_size]
+                futures = {executor.submit(scrape_single_domain, dom): dom for dom in batch}
+                for future in concurrent.futures.as_completed(futures):
+                    dom = futures[future]
+                    try:
+                        res = future.result()
+                    except Exception:
+                        res = error_row(dom)
+                    _save_row(res)  # يتخزن فوراً — لو الات عيط مفيش حاجة بتضيع
+                    completed += 1
+                    progress_bar.progress(completed / total)
+                    status_text.markdown(f"**جاري فحص وتدقيق ({completed}/{total}) موقع...**")
+                time.sleep(1)  # نفس بسيط بين الدفعات — يخفف الضغط على الشبكة
         except Exception as e:
             st.error(f"حدث خطأ غير متوقع أثناء الفحص: {e}")
         finally:
             # wait=False: لو المستخدم عمل ريفريش، مش هنستنى الشبكة كلها تخلص -> مفيش تعلق
             executor.shutdown(wait=False, cancel_futures=True)
 
-        st.session_state['partial_results'] = list(results)
+        all_rows = _load_done()
+        st.session_state['partial_results'] = all_rows
 
         st.balloons()
-        st.success(f"🎉 اكتمل فحص واكتشاف {len(results)} موقع بنجاح!")
+        st.success(f"🎉 اكتمل فحص واكتشاف {len(all_rows)} موقع بنجاح!")
 
-        df_res = pd.DataFrame(results)
+# ---------------------------------------------------------------------------
+# عرض النتائج المحفوظة (من الجلسة الحالية أو الجلسات السابقة — من القرص)
+# ---------------------------------------------------------------------------
+saved_rows = _load_done()
+if saved_rows:
+    st.markdown("### 📊 النتائج المخزنة")
+    df_partial = pd.DataFrame(saved_rows)
+    st.dataframe(df_partial, width='stretch')
 
-        # Display Inverted Summary Card
-        st.markdown(f"""
-        <div class="inverted-section">
-            <h3 style="font-family:'Calistoga',serif; font-size:28px; margin-bottom:8px;">إحصائيات الفحص النهائي</h3>
-            <p style="color:#94A3B8; margin-bottom:16px;">تم فحص {len(df_res)} موقع بنجاح مئة بالمئة بنظام الفلترة الدقيق.</p>
-        </div>
-        """, unsafe_allow_html=True)
-
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.dataframe(df_res, width='stretch')
-
-        buffer = io.BytesIO()
-        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-            df_res.to_excel(writer, index=False, sheet_name='البيانات المستخرجة')
-        buffer.seek(0)
-
-        st.download_button(
-            label="📥 تحميل ملف Excel النهائي والمهيكل",
-            data=buffer,
-            file_name="scraped_contacts_and_metrics_minimalist.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-
-# عرض النتائج الجزئية لو الجلسة اتقطعت (ريفريش/خطأ) — البيانات مش بتضيع
-if st.session_state.get('partial_results'):
-    st.markdown("### 📊 نتائج جلسة سابقة (محفوظة)")
-    partial_df = pd.DataFrame(st.session_state['partial_results'])
-    st.dataframe(partial_df, width='stretch')
     pbuf = io.BytesIO()
     with pd.ExcelWriter(pbuf, engine='openpyxl') as writer:
-        partial_df.to_excel(writer, index=False, sheet_name='البيانات الجزئية')
+        df_partial.to_excel(writer, index=False, sheet_name='البيانات المستخرجة')
     pbuf.seek(0)
     st.download_button(
-        label="📥 تحميل النتائج الجزئية المحفوظة (Excel)",
+        label="📥 تحميل النتائج كملف Excel",
         data=pbuf,
-        file_name="partial_results.xlsx",
+        file_name="scraped_results.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
+    if st.checkbox("🗑️ مسح النتائج المحفوظة وبدء من جديد"):
+        if st.button("تأكيد المسح"):
+            with _lock:
+                if os.path.exists(RESULTS_FILE):
+                    os.remove(RESULTS_FILE)
+            st.session_state['partial_results'] = []
+            st.success("تم مسح النتائج المحفوظة — يلا من الأول.")
