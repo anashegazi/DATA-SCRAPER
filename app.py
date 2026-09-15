@@ -351,13 +351,13 @@ def fetch_url(url, retries=1):
 
 
 
-def scrape_single_domain(domain, fast=False):
+def scrape_single_domain(domain):
     try:
         domain = domain.strip().replace('https://', '').replace('http://', '').split('/')[0].strip()
         if not domain:
             return error_row(domain)
-        # fast: الرئيسية بس — الكامل: homepage + الداخلية
-        bucket = harvest_domain(domain, fetch_url, max_pages=0 if fast else 5)
+        # فحص شامل دائم: الصفحة الرئيسية + الصفحات الداخلية (اتصل بنا / من نحن)
+        bucket = harvest_domain(domain, fetch_url, max_pages=5)
         row = bucket_to_row(domain, bucket)
         # الأعمدة موجودة وفارغة ليتم ملؤها يدوياً
         row['الزيارات الشهرية التقديرية'] = ''
@@ -441,20 +441,9 @@ if domain_list:
     if "domains_queue" not in st.session_state:
         st.session_state.domains_queue = []
         st.session_state.done_domains = set()
-        st.session_state.fast_mode = True
         st.session_state.scan_started = False
 
-    scan_mode = st.radio(
-        "⚡ نوع الفحص:",
-        [
-            "سريع — الصفحة الرئيسية فقط (فائق السرعة)",
-            "شامل — الرئيسية + صفحات التواصل (اتصل بنا / من نحن)",
-        ],
-        horizontal=True,
-    )
-    st.session_state.fast_mode = scan_mode.startswith("سريع")
-
-    st.markdown(f"### ⚙️ الروابط الجاهزة: **{total} موقع**")
+    st.markdown(f"### ⚙️ الروابط الجاهزة: **{total} موقع** (فحص شامل للرئيسية وصفحات التواصل)")
 
     if st.button("🚀 بدء الاستخراج التلقائي الآن"):
         st.session_state.domains_queue = list(domain_list)
@@ -477,7 +466,7 @@ if domain_list:
             with st.spinner(f"جاري فحص {processed_so_far + 1} إلى {min(processed_so_far + len(chunk), total)}..."):
                 # with pool عادي جوه الـ chunk = لا threads معلقة بعد الختام (لا leak)
                 with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-                    futures = {executor.submit(scrape_single_domain, d, st.session_state.fast_mode): d for d in chunk}
+                    futures = {executor.submit(scrape_single_domain, d): d for d in chunk}
                     for future in concurrent.futures.as_completed(futures):
                         d = futures[future]
                         try:

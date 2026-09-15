@@ -124,9 +124,9 @@ def error_row(domain):
     return row
 
 
-def scrape_worker(domain, fast, use_parallel):
+def scrape_worker(domain, use_parallel=False):
     try:
-        bucket = harvest_domain(domain, fetch_url, max_pages=0 if fast else 5, parallel=use_parallel)
+        bucket = harvest_domain(domain, fetch_url, max_pages=5, parallel=use_parallel)
         row = bucket_to_row(domain, bucket)
         # الأعمدة موجودة وفارغة ليتم ملؤها يدوياً
         row['الزيارات الشهرية التقديرية'] = ''
@@ -234,7 +234,7 @@ def main():
     total = len(domains)
 
     print(f'[*] إجمالي: {total} دومين | تم سابقاً: {len(done_domains)} | المتبقي: {len(pending)}')
-    print(f'[*] الوضع: {"سريع (رئيسية فقط)" if fast else "كامل (داخلي + ترافيك)"} | عمال: {args.workers} | مهلة: {args.timeout}s')
+    print(f'[*] الوضع: فحص كامل وشامل (رئيسية + صفحات تواصل داخلية) | عمال: {args.workers} | مهلة: {args.timeout}s')
 
     start = time.time()
     completed = 0
@@ -242,7 +242,7 @@ def main():
     if pending:
         with tqdm(total=len(pending), desc='فحص', unit='موقع', bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]') as bar:
             with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as executor:
-                futures = {executor.submit(scrape_worker, d, fast, use_parallel): d for d in pending}
+                futures = {executor.submit(scrape_worker, d, use_parallel): d for d in pending}
                 try:
                     for future in concurrent.futures.as_completed(futures):
                         d = futures[future]
