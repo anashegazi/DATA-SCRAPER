@@ -11,6 +11,7 @@ import random
 import io
 import openpyxl
 import urllib3
+from extractors import harvest_domain, bucket_to_row, SOCIAL_NETWORKS
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -282,188 +283,32 @@ def is_valid_phone(phone):
         return True
     return False
 
-def fetch_url(url):
-    headers = {
-        'User-Agent': random.choice(USER_AGENTS),
-        'Accept-Language': 'ar-SA,ar;q=0.9,en-US;q=0.8,en;q=0.7',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
-    }
-    try:
-        res = requests.get(url, headers=headers, timeout=8, allow_redirects=True, verify=False)
-        if res and len(res.text) > 300:
-            return res
-    except Exception:
-        pass
+def fetch_url(url, retries=2):
+    for attempt in range(retries):
+        headers = {
+            'User-Agent': random.choice(USER_AGENTS),
+            'Accept-Language': 'ar-SA,ar;q=0.9,en-US;q=0.8',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+        }
+        try:
+            res = requests.get(url, headers=headers, timeout=12,
+                               allow_redirects=True, verify=False)
+            if res is not None and len(res.text) > 300:
+                return res
+        except Exception:
+            time.sleep(0.6 * (attempt + 1))
     return None
 
 def scrape_single_domain(domain):
     domain = domain.strip().replace('https://', '').replace('http://', '').split('/')[0]
-    item = {
-        'الموقع (Domain)': domain,
-        'عنوان المتجر': '',
-        'منصة المتجر': 'غير معروف',
-        'الحالة': 'غير متاح',
-        'أرقام التواصل': '',
-        'رابط الواتساب': '',
-        'البريد الإلكتروني': '',
-        'فيسبوك': '',
-        'انستجرام': '',
-        'تيك توك': '',
-        'تويتر / X': '',
-        'سناب شات': '',
-        'الزيارات الشهرية التقديرية': '0',
-        'العوائد الشهرية التقديرية (SAR)': '0 SAR'
-    }
+    bucket = harvest_domain(domain, fetch_url, max_pages=5)
+    row = bucket_to_row(domain, bucket)
 
-    res = None
-    target_urls = [f"https://{domain}/ar", f"https://www.{domain}/ar", f"https://{domain}", f"https://www.{domain}"]
-    for url in target_urls:
-        res = fetch_url(url)
-        if res and res.status_code == 200:
-            break
-
-    if not res:
-        return item
-
-    html_content = res.text
-    soup = BeautifulSoup(html_content, 'html.parser')
-    item['الحالة'] = 'نشط'
-
-    title_tag = soup.find('title')
-    if title_tag and title_tag.string:
-        item['عنوان المتجر'] = title_tag.string.strip()
-
-    page_text_lower = html_content.lower()
-    if 'salla.sa' in page_text_lower or 'cdn.salla.sa' in page_text_lower or 'twilight' in page_text_lower:
-        item['منصة المتجر'] = 'سلة (Salla)'
-    elif 'zid.sa' in page_text_lower or 'cdn.zid.sa' in page_text_lower or 'zid-store' in page_text_lower:
-        item['منصة المتجر'] = 'زد (Zid)'
-    elif 'shopify' in page_text_lower:
-        item['منصة المتجر'] = 'Shopify'
-    elif 'wp-content' in page_text_lower or 'woocommerce' in page_text_lower:
-        item['منصة المتجر'] = 'WooCommerce/WP'
-
-    phones = set()
-    whatsapp_links = set()
-    emails = set()
-
-    def extract_from_html(html_str):
-        soup_obj = BeautifulSoup(html_str, 'html.parser')
-        
-        wa_json = re.findall(r'"whatsapp":\s*"([^"]+)"', html_str, re.IGNORECASE)
-        phone_json = re.findall(r'"phone":\s*"([^"]+)"|"mobile":\s*"([^"]+)"', html_str, re.IGNORECASE)
-        for w in wa_json:
-            if w.strip():
-                cp = clean_phone(w.strip())
-                if is_valid_phone(cp):
-                    phones.add(cp)
-                    whatsapp_links.add(f"https://wa.me/{cp.replace('+', '')}")
-
-        for p_tuple in phone_json:
-            for p in p_tuple:
-                if p.strip():
-                    cp = clean_phone(p.strip())
-                    if is_valid_phone(cp): phones.add(cp)
-
-        a_tags = [a for a in soup_obj.find_all('a', href=True)]
-        for a in a_tags:
-            link = a.get('href', '')
-            if link.startswith('tel:'):
-                p = clean_phone(link.replace('tel:', '').strip())
-                if is_valid_phone(p): phones.add(p)
-            if any(w in link.lower() for w in ['wa.me', 'api.whatsapp.com', 'whatsapp://', 'chat.whatsapp.com']):
-                if not '${' in link and not 'undefined' in link:
-                    whatsapp_links.add(link)
-                    wa_match = re.search(r'(?:\+?966|00966|0)?5\d{8,9}\b', link.replace('-','').replace(' ',''))
-                    if wa_match:
-                        cp = clean_phone(wa_match.group(0))
-                        if is_valid_phone(cp): phones.add(cp)
-            if link.startswith('mailto:'):
-                emails.add(link.replace('mailto:', '').split('?')[0].strip())
-
-        for element in soup_obj(["script", "style", "head", "noscript"]):
-            element.extract()
-        visible_text = soup_obj.get_text()
-
-        # Advanced regex with flexible separators
-        sep = r'[\s\-.\(\)\/]*'
-        mobile_pattern = r'(?:\+?966|00966|0)?' + sep + r'5(?:' + sep + r'\d){8}\b'
-        unified_pattern = r'\b9200(?:' + sep + r'\d){5}\b'
-        tollfree_pattern = r'\b800(?:' + sep + r'\d){6,7}\b'
-
-        raw_phones = re.findall(mobile_pattern, visible_text) + \
-                     re.findall(unified_pattern, visible_text) + \
-                     re.findall(tollfree_pattern, visible_text)
-
-        for p in raw_phones:
-            cp = clean_phone(p)
-            if is_valid_phone(cp): phones.add(cp)
-
-        email_matches = re.findall(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', visible_text)
-        for em in email_matches:
-            if not em.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.css', '.js', '.woff', '.ttf')):
-                # Filter false positive emails
-                if not re.search(r'\.{2,}|@.*@|\.\w{1}$|^test@|^admin@|^example@|^fake@', em.lower()):
-                    emails.add(em)
-                    
-        return a_tags
-
-    # 1. Scrape Homepage
-    links = extract_from_html(html_content)
-
-    # 2. Contact Page Detection (Fallback)
-    if len(phones) == 0 or len(emails) == 0:
-        contact_urls = set()
-        for a in links:
-            href = a.get('href', '').lower()
-            text_val = a.get_text().lower()
-            if any(k in href or k in text_val for k in ['contact', 'اتصل', 'تواصل', 'reach']):
-                if href.startswith('http') and domain in href:
-                    contact_urls.add(href)
-                elif href.startswith('/'):
-                    contact_urls.add(f"https://{domain}{href}")
-        
-        if not contact_urls:
-            contact_urls.add(f"https://{domain}/contact-us")
-            contact_urls.add(f"https://{domain}/pages/contact-us")
-            contact_urls.add(f"https://{domain}/اتصل-بنا")
-            
-        for curl in list(contact_urls)[:2]:
-            c_res = fetch_url(curl)
-            if c_res and c_res.status_code == 200:
-                extract_from_html(c_res.text)
-
-    social_map = {
-        'فيسبوك': ['facebook.com', 'fb.com'],
-        'انستجرام': ['instagram.com'],
-        'تيك توك': ['tiktok.com'],
-        'تويتر / X': ['twitter.com', 'x.com'],
-        'سناب شات': ['snapchat.com']
-    }
-    found_socials = {k: set() for k in social_map}
-    for a in links:
-        link = a.get('href', '')
-        l_lower = link.lower()
-        for platform, domains in social_map.items():
-            if any(d in l_lower for d in domains):
-                if not any(x in l_lower for x in ['share', 'intent/tweet', 'sharer.php', 'salla.sa', 'widgets', 'schema.org']):
-                    found_socials[platform].add(link)
-
-    rank = get_tranco_rank(domain)
-    visits, est_rev, _ = estimate_metrics(rank, item['منصة المتجر'], True)
-
-    item['أرقام التواصل'] = " | ".join(sorted(list(phones)))
-    item['رابط الواتساب'] = " | ".join(sorted(list(whatsapp_links)))
-    item['البريد الإلكتروني'] = " | ".join(sorted(list(emails)))
-    item['فيسبوك'] = " | ".join(sorted(list(found_socials['فيسبوك'])))
-    item['انستجرام'] = " | ".join(sorted(list(found_socials['انستجرام'])))
-    item['تيك توك'] = " | ".join(sorted(list(found_socials['تيك توك'])))
-    item['تويتر / X'] = " | ".join(sorted(list(found_socials['تويتر / X'])))
-    item['سناب شات'] = " | ".join(sorted(list(found_socials['سناب شات'])))
-    item['الزيارات الشهرية التقديرية'] = f"{visits:,}"
-    item['العوائد الشهرية التقديرية (SAR)'] = est_rev
-
-    return item
+    rank = get_tranco_rank(domain) if bucket['active'] else None
+    visits, est_rev, _ = estimate_metrics(rank, row['منصة المتجر'], bucket['active'])
+    row['الزيارات الشهرية التقديرية'] = f"{visits:,}"
+    row['العوائد الشهرية التقديرية (SAR)'] = est_rev
+    return row
 
 # --- MINIMALIST MODERN HERO SECTION ---
 st.markdown("""
@@ -528,7 +373,7 @@ if domain_list:
         results = []
         total = len(domain_list)
         
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
             futures = {executor.submit(scrape_single_domain, dom): dom for dom in domain_list}
             completed = 0
             for future in concurrent.futures.as_completed(futures):
