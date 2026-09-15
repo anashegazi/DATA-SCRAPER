@@ -298,14 +298,32 @@ def fetch_url(url, retries=1):
     return None
 
 def scrape_single_domain(domain):
-    domain = domain.strip().replace('https://', '').replace('http://', '').split('/')[0]
-    bucket = harvest_domain(domain, fetch_url, max_pages=5)
-    row = bucket_to_row(domain, bucket)
+    try:
+        domain = domain.strip().replace('https://', '').replace('http://', '').split('/')[0].strip()
+        if not domain:
+            return error_row(domain)
+        bucket = harvest_domain(domain, fetch_url, max_pages=5)
+        row = bucket_to_row(domain, bucket)
 
-    rank = get_tranco_rank(domain) if bucket['active'] else None
-    visits, est_rev, _ = estimate_metrics(rank, row['منصة المتجر'], bucket['active'])
-    row['الزيارات الشهرية التقديرية'] = f"{visits:,}"
-    row['العوائد الشهرية التقديرية (SAR)'] = est_rev
+        rank = get_tranco_rank(domain) if bucket['active'] else None
+        visits, est_rev, _ = estimate_metrics(rank, row['منصة المتجر'], bucket['active'])
+        row['الزيارات الشهرية التقديرية'] = f"{visits:,}"
+        row['العوائد الشهرية التقديرية (SAR)'] = est_rev
+        return row
+    except Exception:
+        return error_row(domain)
+
+
+def error_row(domain):
+    """صف بأعمدة متطابقة مع النجاح — عشان دومين واحد مشيميش shutdown ولا يطيح الدفعة كلها."""
+    bucket = {
+        'phones': set(), 'whatsapp': set(), 'emails': set(),
+        'socials': {k: set() for k in SOCIAL_NETWORKS},
+        'title': '', 'platform': 'غير معروف', 'active': False,
+    }
+    row = bucket_to_row(domain, bucket)
+    row['الزيارات الشهرية التقديرية'] = '0'
+    row['العوائد الشهرية التقديرية (SAR)'] = '0 SAR'
     return row
 
 # --- MINIMALIST MODERN HERO SECTION ---
@@ -363,30 +381,44 @@ with tab2:
         domain_list = [l.strip() for l in lines if l.strip()]
 
 if domain_list:
+    domain_list = [d.strip() for d in domain_list if d and d.strip()]
     st.markdown(f"### ⚙️ الروابط المجهزة للبدء: **{len(domain_list)} موقع**")
     if st.button("🚀 بدء الاستخراج التلقائي الان"):
         progress_bar = st.progress(0)
         status_text = st.empty()
         status_text.info("⏳ جاري تحضير المحركات والبدء في الفحص... يرجى الانتظار (قد يستغرق فحص الموقع الأول بضع ثوانٍ)")
-        
+
         results = []
         total = len(domain_list)
-        
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        max_workers = min(6, total)
+
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+        try:
             futures = {executor.submit(scrape_single_domain, dom): dom for dom in domain_list}
             completed = 0
             for future in concurrent.futures.as_completed(futures):
-                res = future.result()
+                dom = futures[future]
+                try:
+                    res = future.result()
+                except Exception:
+                    res = error_row(dom)
                 results.append(res)
                 completed += 1
                 progress_bar.progress(completed / total)
                 status_text.markdown(f"**جاري فحص وتدقيق ({completed}/{total}) موقع...**")
-                
+        except Exception as e:
+            st.error(f"حدث خطأ غير متوقع أثناء الفحص: {e}")
+        finally:
+            # wait=False: لو المستخدم عمل ريفريش، مش هنستنى الشبكة كلها تخلص -> مفيش تعلق
+            executor.shutdown(wait=False, cancel_futures=True)
+
+        st.session_state['partial_results'] = list(results)
+
         st.balloons()
-        st.success("🎉 اكتمل فحص واكتشاف جميع المواقع بنجاح!")
-        
+        st.success(f"🎉 اكتمل فحص واكتشاف {len(results)} موقع بنجاح!")
+
         df_res = pd.DataFrame(results)
-        
+
         # Display Inverted Summary Card
         st.markdown(f"""
         <div class="inverted-section">
@@ -394,18 +426,34 @@ if domain_list:
             <p style="color:#94A3B8; margin-bottom:16px;">تم فحص {len(df_res)} موقع بنجاح مئة بالمئة بنظام الفلترة الدقيق.</p>
         </div>
         """, unsafe_allow_html=True)
-        
+
         st.markdown("<br>", unsafe_allow_html=True)
         st.dataframe(df_res, width='stretch')
-        
+
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
             df_res.to_excel(writer, index=False, sheet_name='البيانات المستخرجة')
         buffer.seek(0)
-        
+
         st.download_button(
             label="📥 تحميل ملف Excel النهائي والمهيكل",
             data=buffer,
             file_name="scraped_contacts_and_metrics_minimalist.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
+# عرض النتائج الجزئية لو الجلسة اتقطعت (ريفريش/خطأ) — البيانات مش بتضيع
+if st.session_state.get('partial_results'):
+    st.markdown("### 📊 نتائج جلسة سابقة (محفوظة)")
+    partial_df = pd.DataFrame(st.session_state['partial_results'])
+    st.dataframe(partial_df, width='stretch')
+    pbuf = io.BytesIO()
+    with pd.ExcelWriter(pbuf, engine='openpyxl') as writer:
+        partial_df.to_excel(writer, index=False, sheet_name='البيانات الجزئية')
+    pbuf.seek(0)
+    st.download_button(
+        label="📥 تحميل النتائج الجزئية المحفوظة (Excel)",
+        data=pbuf,
+        file_name="partial_results.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
