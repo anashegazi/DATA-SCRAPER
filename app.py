@@ -428,7 +428,7 @@ if domain_list:
     pending = [d for d in domain_list if d not in done_domains]
     total = len(domain_list)
 
-    resume_info = len(total) - len(pending)
+    resume_info = total - len(pending)
     if resume_info > 0:
         st.info(f"⬅️ تم فحص {resume_info} موقع في الجلسة السابقة — هتستأنف من حيث وقفت.")
 
