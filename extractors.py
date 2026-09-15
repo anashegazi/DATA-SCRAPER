@@ -235,9 +235,9 @@ def _normalize_social(url: str) -> str:
 def extract_socials(raw_html: str, soup: BeautifulSoup) -> dict:
     """بيدور في الـ HTML الخام كله — a tags، JSON-LD sameAs، meta، وسكريبتات."""
     results = {k: set() for k in SOCIAL_NETWORKS}
-    raw = htmllib.unescape(raw_html)
+    raw = htmllib.unescape(raw_html).replace(r'\/', '/')
 
-    # كل اللينكات المحتملة من أي مكان في الصفحة
+    # البحث الشامل بالريجكس في أي مكان في الصفحة
     candidates = set(re.findall(r'https?://[^\s"\'<>)\\]{6,200}', raw))
     candidates |= {a['href'] for a in soup.find_all('a', href=True)}
     for tag in soup.find_all('meta', attrs={'content': True}):
