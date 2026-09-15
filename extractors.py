@@ -376,13 +376,14 @@ def harvest_domain(domain: str, fetch_url, max_pages: int = 3) -> dict:
     candidates = (
         f"https://{domain}",
         f"https://www.{domain}",
-        f"https://{domain}/ar",
-        f"http://{domain}"
     )
 
     res = None
     for url in candidates:
         r = fetch_url(url)
+        if r == 'BLOCKED':
+            # تخطي فوري — الدومين محمي بـ WAF/كابتشا ولا فائدة من تجربة عناوين أخرى
+            break
         if r is not None and getattr(r, 'status_code', None) == 200:
             res = r
             break

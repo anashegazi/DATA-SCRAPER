@@ -289,7 +289,9 @@ def fetch_url(url, retries=1):
                 continue
             text_head = (res.text or '')[:300]
             if 'Just a moment' in text_head or 'التحقق البشري | Salla' in (res.text or '')[:2000]:
-                return None
+                return 'BLOCKED'
+            if res.status_code in (403, 429):
+                return 'BLOCKED'
             if res.status_code == 200 and len(res.text) > 300:
                 return res
         except Exception:
@@ -428,7 +430,7 @@ if domain_list:
                     done.add(d)
                     count_done = len(done)
                     progress_bar.progress(min(count_done / total, 1.0))
-                    status_box.markdown(f"**⚡ المكتمل: {count_done} / {total} موقع | أحدث موقع: `{d}`**")
+                    status_box.markdown(f"**⚡ المكتمل: {count_done} / {total} موقع | تم فحص: `{d}` — جاري معالجة التالي...**")
 
             # تحديث الواجهة تلقائياً للدفعة التالية (يمنع انقطاع الاتصال وتجمد المتصفح)
             st.rerun()

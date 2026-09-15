@@ -64,10 +64,11 @@ def fetch_url(url):
         res = session.get(url, timeout=TIMEOUT, allow_redirects=True)
         if res is None:
             return None
-        # تجاهل صفحات الكابتشا والتحقق البشري
         text_head = (res.text or '')[:300]
         if 'Just a moment' in text_head or 'التحقق البشري | Salla' in (res.text or '')[:2000]:
-            return None
+            return 'BLOCKED'
+        if res.status_code in (403, 429):
+            return 'BLOCKED'
         if res.status_code == 200 and len(res.text) > 300:
             return res
     except Exception:
