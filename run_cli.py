@@ -119,8 +119,8 @@ def error_row(domain):
         'title': '', 'platform': 'غير معروف', 'active': False,
     }
     row = bucket_to_row(domain, bucket)
-    row['الزيارات الشهرية التقديرية'] = '0'
-    row['العوائد الشهرية التقديرية (SAR)'] = '0 SAR'
+    row['الزيارات الشهرية التقديرية'] = ''
+    row['العوائد الشهرية التقديرية (SAR)'] = ''
     return row
 
 
@@ -128,14 +128,9 @@ def scrape_worker(domain, fast, use_parallel):
     try:
         bucket = harvest_domain(domain, fetch_url, max_pages=0 if fast else 5, parallel=use_parallel)
         row = bucket_to_row(domain, bucket)
-
-        rank = None
-        if not fast and bucket['active']:
-            rank = get_tranco_rank(domain)
-        visits, est_rev, _ = estimate_metrics(rank, row['منصة المتجر'], bucket['active'])
-        row['الزيارات الشهرية التقديرية'] = f"{visits:,}"
-        row['العوائد الشهرية التقديرية (SAR)'] = est_rev
-        row['Tranco Global Rank'] = f"{rank:,}" if rank else 'N/A'
+        # الأعمدة موجودة وفارغة ليتم ملؤها يدوياً
+        row['الزيارات الشهرية التقديرية'] = ''
+        row['العوائد الشهرية التقديرية (SAR)'] = ''
         return row
     except Exception:
         return error_row(domain)

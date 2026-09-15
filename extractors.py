@@ -372,8 +372,8 @@ def harvest_domain(domain: str, fetch_url, max_pages: int = 5, parallel: bool = 
         'title': '', 'platform': 'غير معروف', 'active': False,
     }
 
-    candidates = (f"https://{domain}/ar", f"https://www.{domain}/ar",
-                  f"https://{domain}", f"https://www.{domain}", f"http://{domain}")
+    candidates = (f"https://{domain}", f"https://www.{domain}",
+                  f"https://{domain}/ar", f"https://www.{domain}/ar", f"http://{domain}")
 
     res = None
     if parallel and len(candidates) > 1:

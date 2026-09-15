@@ -22,10 +22,10 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 RESULTS_FILE = 'partial_results.jsonl'
 _lock = threading.Lock()
 
-# ── ضبط الوضع القابل للتعديل من هنا بعد أول تشغيل حقيقي ──
-CHUNK_SIZE = 10        # عدد الدومينات في كل خطوة/ريرن (جرّب 8-15)
-MAX_WORKERS = 6        # العمال داخل كل chunk — 4-6 آمن للـ free tier
-REQUEST_TIMEOUT = 4    # مهلة الطلب بالثواني (كانت 6 — أقل = لجم أسرع للمحظور)
+# ── ضبط سرعة وأداء الفحص ──
+CHUNK_SIZE = 25        # عدد الدومينات في كل دفعة
+MAX_WORKERS = 15       # عدد العمال المتزامنين
+REQUEST_TIMEOUT = (2.5, 3.5)  # مهلة الطلب (اتصال 2.5 ثانية، قراءة 3.5 ثانية)
 
 def _save_row(row):
     with _lock:
@@ -348,20 +348,7 @@ def fetch_url(url, retries=1):
             pass
     return None
 
-def _cloudflare_blocked(domain):
-    """Probe واحدة سريعة: لو حافة سلة/Cloudflare بتبعت JS challenge ندّيها فوراً ونتخطى الصيغ الـ 4."""
-    try:
-        session = _get_session()
-        res = session.get(f"https://{domain}", timeout=REQUEST_TIMEOUT, allow_redirects=True)
-        if res.status_code in (403, 429, 503):
-            server = (res.headers.get('Server') or '').lower()
-            cfm = (res.headers.get('cf-mitigated') or '').lower()
-            head = (res.text or '')[:300]
-            if 'cloudflare' in server or cfm == 'yes' or 'just a moment' in head.lower():
-                return True
-    except Exception:
-        pass
-    return False
+
 
 
 def scrape_single_domain(domain, fast=False):
@@ -369,28 +356,12 @@ def scrape_single_domain(domain, fast=False):
         domain = domain.strip().replace('https://', '').replace('http://', '').split('/')[0].strip()
         if not domain:
             return error_row(domain)
-        # دومين محظور من Cloudflare — موجود وشغال بس محتاج معالجة يدوية
-        if _cloudflare_blocked(domain):
-            bucket = {
-                'phones': set(), 'whatsapp': set(), 'emails': set(),
-                'socials': {k: set() for k in SOCIAL_NETWORKS},
-                'title': '', 'platform': 'غير معروف', 'active': True,
-            }
-            row = bucket_to_row(domain, bucket)
-            row['الحالة'] = 'محظور (Cloudflare)'
-            row['الزيارات الشهرية التقديرية'] = '0'
-            row['العوائد الشهرية التقديرية (SAR)'] = '0 SAR'
-            return row
-        # fast: الرئيسية بس (اختيار سرعة) — الكامل: homepage + الداخلية + tranco
+        # fast: الرئيسية بس — الكامل: homepage + الداخلية
         bucket = harvest_domain(domain, fetch_url, max_pages=0 if fast else 5)
         row = bucket_to_row(domain, bucket)
-
-        rank = None
-        if not fast and bucket['active']:
-            rank = get_tranco_rank(domain)
-        visits, est_rev, _ = estimate_metrics(rank, row['منصة المتجر'], bucket['active'])
-        row['الزيارات الشهرية التقديرية'] = f"{visits:,}"
-        row['العوائد الشهرية التقديرية (SAR)'] = est_rev
+        # الأعمدة موجودة وفارغة ليتم ملؤها يدوياً
+        row['الزيارات الشهرية التقديرية'] = ''
+        row['العوائد الشهرية التقديرية (SAR)'] = ''
         return row
     except Exception:
         return error_row(domain)
@@ -404,8 +375,8 @@ def error_row(domain):
         'title': '', 'platform': 'غير معروف', 'active': False,
     }
     row = bucket_to_row(domain, bucket)
-    row['الزيارات الشهرية التقديرية'] = '0'
-    row['العوائد الشهرية التقديرية (SAR)'] = '0 SAR'
+    row['الزيارات الشهرية التقديرية'] = ''
+    row['العوائد الشهرية التقديرية (SAR)'] = ''
     return row
 
 # --- MINIMALIST MODERN HERO SECTION ---
@@ -474,16 +445,14 @@ if domain_list:
         st.session_state.scan_started = False
 
     scan_mode = st.radio(
-        "⚡ سرعة الفحص:",
+        "⚡ نوع الفحص:",
         [
-            "سريع — الرئيسية فقط (الأسرع، بدون تقديرات ترافيك)",
-            "شامل — الرئيسية + صفحات اتصل/من-نحن + تقديرات ترافيك",
+            "سريع — الصفحة الرئيسية فقط (فائق السرعة)",
+            "شامل — الرئيسية + صفحات التواصل (اتصل بنا / من نحن)",
         ],
         horizontal=True,
     )
     st.session_state.fast_mode = scan_mode.startswith("سريع")
-    if not st.session_state.fast_mode and total > 100:
-        st.warning("⚠️ الوضع الشامل أبطأ على الدفعات الكبيرة — الأفضل دفعة أصغر (≤100) أو الوضع السريع.")
 
     st.markdown(f"### ⚙️ الروابط الجاهزة: **{total} موقع**")
 
