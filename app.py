@@ -26,231 +26,194 @@ st.set_page_config(
 # -----------------------------------------------------------------------------
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Calistoga&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Readex+Pro:wght@300;400;500;600;700&display=swap');
-    
+    @import url('https://fonts.googleapis.com/css2?family=Calistoga&family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Readex+Pro:wght@200;300;400;500;600;700&display=swap');
+
     :root {
-        --bg-main: #FAFAFA;
-        --fg-main: #0F172A;
-        --muted-bg: #F1F5F9;
-        --muted-fg: #64748B;
-        --accent-start: #0052FF;
-        --accent-end: #4D7CFF;
-        --accent-gradient: linear-gradient(135deg, #0052FF 0%, #4D7CFF 100%);
-        --card-bg: #FFFFFF;
-        --border-color: #E2E8F0;
-        --dark-card: #1E293B;
-    }
-    
-    /* Enforce robust RTL & Base Typography */
-    html, body, [class*="css"], .stApp, .stMarkdown, p, div, h1, h2, h3, h4, h5, h6, label {
-        font-family: 'Readex Pro', 'Inter', -apple-system, sans-serif;
-        direction: rtl !important;
-        text-align: right !important;
-    }
-    
-    /* Background Override */
-    .stApp, .stApp > header {
-        background-color: var(--bg-main) !important;
-    }
-    
-    /* Ensure layout columns stay proper in RTL */
-    [data-testid="column"] {
-        direction: rtl !important;
-    }
-    
-    /* Center Specific UI Elements */
-    .hero-headline, .hero-sub, .min-card, .min-card h3, .min-card p, .stButton>button {
-        text-align: center !important;
-    }
-    
-    /* Center the badge container itself */
-    .badge-container {
-        display: flex;
-        justify-content: center;
-        width: 100%;
-        margin-bottom: 16px;
+        --bg: #070A12;
+        --surface: rgba(255,255,255,0.045);
+        --surface-2: rgba(255,255,255,0.075);
+        --border: rgba(255,255,255,0.09);
+        --fg: #F1F5F9;
+        --muted: #8D9BB5;
+        --a1: #2F6BFF;
+        --a2: #6D5DFF;
+        --a3: #22D3EE;
+        --grad: linear-gradient(120deg, #2F6BFF 0%, #6D5DFF 45%, #22D3EE 100%);
+        --radius: 22px;
     }
 
-    /* Section Badge System */
+    html, body, [class*="css"], .stApp, .stMarkdown, p, div, h1,h2,h3,h4,h5,h6, label, span {
+        font-family: 'Readex Pro','Inter',-apple-system,sans-serif;
+        direction: rtl !important;
+        text-align: right !important;
+        color: var(--fg);
+    }
+
+    /* ===== خلفية Aurora متحركة + حبيبات ناعمة ===== */
+    .stApp {
+        background:
+          radial-gradient(60rem 40rem at 15% -10%, rgba(47,107,255,.28), transparent 60%),
+          radial-gradient(50rem 35rem at 95% 0%, rgba(109,93,255,.22), transparent 60%),
+          radial-gradient(45rem 30rem at 50% 110%, rgba(34,211,238,.16), transparent 60%),
+          var(--bg) !important;
+        background-attachment: fixed !important;
+    }
+    .stApp::before {
+        content:""; position:fixed; inset:0; pointer-events:none; opacity:.035; z-index:0;
+        background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    }
+    .stApp > header { background: transparent !important; }
+    [data-testid="stSidebar"] {
+        background: rgba(10,14,24,.75) !important;
+        backdrop-filter: blur(18px);
+        border-left: 1px solid var(--border);
+    }
+    ::-webkit-scrollbar { width: 9px; }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,.14); border-radius: 9px; }
+
+    [data-testid="column"] { direction: rtl !important; }
+    .hero-headline, .hero-sub, .min-card, .min-card h3, .min-card p, .stButton>button { text-align:center !important; }
+
+    /* ===== البادج ===== */
+    .badge-container { display:flex; justify-content:center; width:100%; margin: 6px 0 18px; }
     .section-badge {
-        display: inline-flex;
-        align-items: center;
-        gap: 10px;
-        background: rgba(0, 82, 255, 0.06);
-        border: 1px solid rgba(0, 82, 255, 0.25);
-        padding: 6px 18px;
-        border-radius: 9999px;
-        direction: ltr !important; /* Keep badge text LTR */
+        display:inline-flex; align-items:center; gap:10px;
+        background: rgba(255,255,255,.05);
+        border: 1px solid var(--border);
+        backdrop-filter: blur(12px);
+        padding: 7px 18px; border-radius: 9999px; direction: ltr !important;
     }
     .badge-dot {
-        width: 8px;
-        height: 8px;
-        border-radius: 50%;
-        background-color: var(--accent-start);
-        box-shadow: 0 0 10px var(--accent-start);
-        animation: pulse 2s infinite ease-in-out;
+        width:8px; height:8px; border-radius:50%; background: var(--a3);
+        box-shadow: 0 0 14px var(--a3); animation: pulse 2.2s infinite ease-in-out;
     }
-    @keyframes pulse {
-        0%, 100% { transform: scale(1); opacity: 1; }
-        50% { transform: scale(1.4); opacity: 0.6; }
-    }
+    @keyframes pulse { 0%,100%{transform:scale(1);opacity:1} 50%{transform:scale(1.5);opacity:.5} }
     .badge-text {
-        font-family: 'JetBrains Mono', 'Readex Pro', monospace;
-        font-size: 13px;
-        font-weight: 600;
-        letter-spacing: 0.12em;
-        color: var(--accent-start);
-        text-transform: uppercase;
-        margin-bottom: 0 !important;
+        font-family:'JetBrains Mono',monospace; font-size:11.5px; font-weight:600;
+        letter-spacing:.18em; color:#CBD5E1; text-transform:uppercase; margin:0 !important;
     }
-    
-    /* Display Headline with Signature Gradient Text */
+
+    /* ===== العنوان الرئيسي ===== */
     .hero-headline {
-        font-family: 'Calistoga', 'Readex Pro', serif !important;
-        font-size: 52px;
-        font-weight: 700;
-        line-height: 1.6 !important; /* Increased line spacing */
-        color: var(--fg-main);
-        margin-bottom: 20px;
-        letter-spacing: -0.01em;
+        font-family:'Calistoga','Readex Pro',serif !important;
+        font-size: clamp(34px, 5.2vw, 62px);
+        line-height: 1.45 !important; letter-spacing:-.02em; margin-bottom:18px;
     }
     .gradient-text {
-        background: var(--accent-gradient);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        display: inline-block;
+        background: var(--grad); background-size: 220% auto;
+        -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        display:inline-block; animation: shine 6s linear infinite;
     }
+    @keyframes shine { to { background-position: 220% center; } }
     .hero-sub {
-        font-size: 18px;
-        color: var(--muted-fg);
-        max-width: 680px;
-        line-height: 1.8;
-        margin: 0 auto 40px auto;
+        font-size:17px; font-weight:300; color: var(--muted);
+        max-width: 660px; line-height:1.9; margin: 0 auto 38px auto;
     }
-    
-    /* Cards with Elevated Layered Shadows & Precise Borders */
+
+    /* ===== كروت زجاجية بحافة متدرجة ===== */
     .min-card {
-        background: var(--card-bg);
-        border: 1px solid var(--border-color);
-        border-radius: 20px;
-        padding: 28px 24px;
-        box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
-        transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        position: relative; background: var(--surface);
+        border: 1px solid var(--border); border-radius: var(--radius);
+        padding: 30px 22px; backdrop-filter: blur(16px);
+        transition: all .35s cubic-bezier(.16,1,.3,1); overflow: hidden;
     }
-    .min-card:hover {
-        transform: translateY(-4px);
-        box-shadow: 0 12px 24px rgba(0, 82, 255, 0.12);
-        border-color: rgba(0, 82, 255, 0.3);
+    .min-card::after {
+        content:""; position:absolute; inset:0; border-radius: var(--radius);
+        padding:1px; background: var(--grad); opacity:0;
+        -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+        -webkit-mask-composite: xor; mask-composite: exclude;
+        transition: opacity .35s ease;
     }
+    .min-card:hover { transform: translateY(-6px); background: var(--surface-2); }
+    .min-card:hover::after { opacity:1; }
     .min-card h3 {
-        font-family: 'Calistoga', 'Readex Pro', serif !important;
-        font-size: 34px !important;
-        margin: 0 0 8px 0 !important;
-        background: var(--accent-gradient);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
+        font-family:'Calistoga',serif !important; font-size:32px !important; margin:0 0 6px !important;
+        background: var(--grad); -webkit-background-clip:text; -webkit-text-fill-color:transparent;
     }
-    .min-card p {
-        font-size: 15px;
-        color: var(--muted-fg);
-        margin: 0;
-        font-weight: 500;
-    }
-    
-    /* Signature Electric Blue Gradient Action Buttons */
-    .stButton {
-        display: flex;
-        justify-content: center;
-        margin-top: 10px;
-        margin-bottom: 20px;
-    }
+    .min-card p { font-size:14px; color: var(--muted); font-weight:300; margin:0; }
+
+    /* ===== زرار فيه لمعة بتمر ===== */
+    .stButton { display:flex; justify-content:center; margin:14px 0 22px; }
     .stButton>button {
-        background: var(--accent-gradient) !important;
-        color: #FFFFFF !important;
-        font-family: 'Readex Pro', sans-serif !important;
-        font-size: 18px !important;
-        font-weight: 600 !important;
-        border-radius: 14px !important;
-        padding: 14px 36px !important;
-        border: none !important;
-        box-shadow: 0 6px 20px rgba(0, 82, 255, 0.3) !important;
-        transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1) !important;
+        position: relative; overflow: hidden;
+        background: var(--grad) !important; background-size:200% auto !important;
+        color:#fff !important; font-family:'Readex Pro',sans-serif !important;
+        font-size:17px !important; font-weight:600 !important;
+        border-radius:16px !important; padding:15px 40px !important; border:none !important;
+        box-shadow: 0 10px 34px rgba(47,107,255,.38) !important;
+        transition: all .3s cubic-bezier(.16,1,.3,1) !important;
     }
+    .stButton>button::before {
+        content:""; position:absolute; top:0; left:-120%; width:60%; height:100%;
+        background: linear-gradient(90deg, transparent, rgba(255,255,255,.35), transparent);
+        animation: sweep 3.2s infinite;
+    }
+    @keyframes sweep { 0%{left:-120%} 60%,100%{left:140%} }
     .stButton>button:hover {
-        transform: translateY(-2px) !important;
-        box-shadow: 0 10px 28px rgba(0, 82, 255, 0.45) !important;
-        filter: brightness(1.05);
+        transform: translateY(-3px) !important; background-position: right center !important;
+        box-shadow: 0 16px 44px rgba(109,93,255,.5) !important;
     }
-    .stButton>button:active {
-        transform: scale(0.98) !important;
-    }
-    
-    /* Tabs Styling */
+    .stButton>button:active { transform: scale(.98) !important; }
+
+    /* ===== تابات على شكل Segmented Pills ===== */
     [data-baseweb="tab-list"] {
-        gap: 16px;
-        border-bottom: 2px solid var(--border-color);
-        justify-content: flex-start !important;
-        flex-direction: row !important;
+        gap:8px; border-bottom:none !important;
+        background: var(--surface); border:1px solid var(--border);
+        padding:6px; border-radius:16px; backdrop-filter: blur(12px);
+        width: fit-content; margin: 0 auto 22px auto;
+        justify-content:center !important; flex-direction: row !important;
     }
     [data-baseweb="tab"] {
-        font-family: 'Readex Pro', sans-serif !important;
-        font-size: 16px !important;
-        font-weight: 600 !important;
-        padding-top: 12px;
-        padding-bottom: 12px;
+        font-family:'Readex Pro',sans-serif !important; font-size:15px !important; font-weight:500 !important;
+        border-radius:12px !important; padding: 9px 20px !important; color: var(--muted) !important;
+        transition: all .25s ease;
     }
-    
-    /* Inverted Slate Container Strategy */
-    .inverted-section {
-        background-color: var(--fg-main);
-        background-image: radial-gradient(circle, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
-        background-size: 24px 24px;
-        color: #FFFFFF !important;
-        border-radius: 24px;
-        padding: 32px;
-        margin-top: 32px;
-        box-shadow: 0 20px 40px rgba(15, 23, 42, 0.15);
-        text-align: right;
+    [data-baseweb="tab"][aria-selected="true"] {
+        background: var(--grad) !important; color:#fff !important;
+        box-shadow: 0 6px 18px rgba(47,107,255,.35);
     }
-    .inverted-section h3, .inverted-section p {
-        color: #FFFFFF !important;
-        text-align: right !important;
-    }
-    
-    /* Custom Inputs & Dropzone */
+    [data-baseweb="tab-highlight"], [data-baseweb="tab-border"] { display:none !important; }
+
+    /* ===== الرفع والإدخال ===== */
     div[data-testid="stFileUploader"] {
-        background: #FFFFFF !important;
-        border: 2px dashed rgba(0, 82, 255, 0.3) !important;
-        border-radius: 16px !important;
-        padding: 32px !important;
-        transition: border-color 0.25s ease !important;
+        background: var(--surface) !important;
+        border: 1.5px dashed rgba(109,93,255,.45) !important;
+        border-radius:18px !important; padding:34px !important;
+        backdrop-filter: blur(12px); transition: all .3s ease !important;
     }
     div[data-testid="stFileUploader"]:hover {
-        border-color: var(--accent-start) !important;
-        background: rgba(0, 82, 255, 0.01) !important;
+        border-color: var(--a3) !important; background: var(--surface-2) !important;
     }
-    
-    /* Text Area */
     .stTextArea textarea {
-        background: #FFFFFF !important;
-        border: 1px solid var(--border-color) !important;
-        border-radius: 14px !important;
-        font-family: 'Readex Pro', sans-serif !important;
-        padding: 16px !important;
+        background: var(--surface) !important; color: var(--fg) !important;
+        border:1px solid var(--border) !important; border-radius:16px !important;
+        padding:16px !important; font-family:'Readex Pro',sans-serif !important;
     }
     .stTextArea textarea:focus {
-        border-color: var(--accent-start) !important;
-        box-shadow: 0 0 0 1px var(--accent-start) !important;
+        border-color: var(--a1) !important; box-shadow: 0 0 0 3px rgba(47,107,255,.18) !important;
     }
-    
-    /* Dataframe Header RTL Fixes */
+
+    /* ===== سيكشن النتائج المقلوب ===== */
+    .inverted-section {
+        background: linear-gradient(135deg, rgba(47,107,255,.16), rgba(109,93,255,.10));
+        border:1px solid var(--border); backdrop-filter: blur(18px);
+        border-radius:24px; padding:30px; margin-top:28px;
+        box-shadow: 0 24px 60px rgba(0,0,0,.45); text-align:right;
+    }
+
+    /* ===== الجدول والبروجريس ===== */
     [data-testid="stDataFrame"] {
-        direction: rtl !important;
+        direction: rtl !important; border:1px solid var(--border);
+        border-radius:16px; overflow:hidden;
     }
-    
-    /* Hide Streamlit Default UI Clutter */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
+    .stProgress > div > div > div > div { background: var(--grad) !important; }
+    [data-testid="stDownloadButton"] button {
+        background: var(--surface-2) !important; border:1px solid var(--border) !important;
+        color: var(--fg) !important; border-radius:14px !important; padding:12px 26px !important;
+    }
+    [data-testid="stDownloadButton"] button:hover { border-color: var(--a3) !important; }
+
+    #MainMenu, footer, [data-testid="stDecoration"] { visibility:hidden; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -505,19 +468,17 @@ def scrape_single_domain(domain):
 # --- MINIMALIST MODERN HERO SECTION ---
 st.markdown("""
 <div class="badge-container">
-    <div class="section-badge">
-        <div class="badge-dot"></div>
-        <div class="badge-text">AUTOMATED INTELLIGENCE PLATFORM</div>
-    </div>
+  <div class="section-badge">
+    <div class="badge-dot"></div>
+    <div class="badge-text">Automated Intelligence Platform</div>
+  </div>
 </div>
-""", unsafe_allow_html=True)
-
-st.markdown("""
 <div class="hero-headline">
-    استخراج بيانات المتاجر <br><span class="gradient-text">بدقة مطلقة وهيكلة ذكية</span>
+    استخراج بيانات المتاجر<br><span class="gradient-text">بدقة مطلقة وهيكلة ذكية</span>
 </div>
 <div class="hero-sub">
-    منصة حديثة تعتمد على البنية الدقيقة للاستخراج المتوازي لوسائل التواصل، أرقام السلات المخبأة، وتقديرات الترافيك والعوائد الشهرية.
+    منصة تعتمد على الاستخراج المتوازي لوسائل التواصل، الأرقام المخبأة داخل كود المتجر،
+    وتقديرات الترافيك والعوائد الشهرية — في ثوانٍ.
 </div>
 """, unsafe_allow_html=True)
 
