@@ -283,7 +283,7 @@ def is_valid_phone(phone):
         return True
     return False
 
-def fetch_url(url, retries=2):
+def fetch_url(url, retries=1):
     for attempt in range(retries):
         headers = {
             'User-Agent': random.choice(USER_AGENTS),
@@ -291,17 +291,17 @@ def fetch_url(url, retries=2):
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
         }
         try:
-            res = requests.get(url, headers=headers, timeout=12,
+            res = requests.get(url, headers=headers, timeout=6,
                                allow_redirects=True, verify=False)
             if res is not None and len(res.text) > 300:
                 return res
         except Exception:
-            time.sleep(0.6 * (attempt + 1))
+            pass
     return None
 
 def scrape_single_domain(domain):
     domain = domain.strip().replace('https://', '').replace('http://', '').split('/')[0]
-    bucket = harvest_domain(domain, fetch_url, max_pages=5)
+    bucket = harvest_domain(domain, fetch_url, max_pages=2)
     row = bucket_to_row(domain, bucket)
 
     rank = get_tranco_rank(domain) if bucket['active'] else None
