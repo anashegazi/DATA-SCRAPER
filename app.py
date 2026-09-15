@@ -369,6 +369,7 @@ if domain_list:
     if st.button("🚀 بدء الاستخراج التلقائي الان"):
         progress_bar = st.progress(0)
         status_text = st.empty()
+        status_text.info("⏳ جاري تحضير المحركات والبدء في الفحص... يرجى الانتظار (قد يستغرق فحص الموقع الأول بضع ثوانٍ)")
         
         results = []
         total = len(domain_list)
