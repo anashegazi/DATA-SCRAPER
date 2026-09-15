@@ -6,7 +6,6 @@ import re
 import urllib.parse
 import json
 import concurrent.futures
-import time
 import random
 import io
 import os
@@ -22,6 +21,11 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # ---------------------------------------------------------------------------
 RESULTS_FILE = 'partial_results.jsonl'
 _lock = threading.Lock()
+
+# ── ضبط الوضع القابل للتعديل من هنا بعد أول تشغيل حقيقي ──
+CHUNK_SIZE = 10        # عدد الدومينات في كل خطوة/ريرن (جرّب 8-15)
+MAX_WORKERS = 6        # العمال داخل كل chunk — 4-6 آمن للـ free tier
+REQUEST_TIMEOUT = 4    # مهلة الطلب بالثواني (كانت 6 — أقل = لجم أسرع للمحظور)
 
 def _save_row(row):
     with _lock:
@@ -328,23 +332,62 @@ def fetch_url(url, retries=1):
     session = _get_session()
     for attempt in range(retries):
         try:
-            res = session.get(url, timeout=6, allow_redirects=True)
-            if res is not None and len(res.text) > 300:
+            res = session.get(url, timeout=REQUEST_TIMEOUT, allow_redirects=True)
+            if res is None:
+                continue
+            # fast-fail: Cloudflare challenge → مفيش داعي نجرب باقي الصيغ
+            if res.status_code in (403, 429, 503):
+                server = (res.headers.get('Server') or '').lower()
+                cfm = (res.headers.get('cf-mitigated') or '').lower()
+                head = (res.text or '')[:300]
+                if 'cloudflare' in server or cfm == 'yes' or 'just a moment' in head.lower():
+                    return None
+            if len(res.text) > 300:
                 return res
         except Exception:
             pass
     return None
+
+def _cloudflare_blocked(domain):
+    """Probe واحدة سريعة: لو حافة سلة/Cloudflare بتبعت JS challenge ندّيها فوراً ونتخطى الصيغ الـ 4."""
+    try:
+        session = _get_session()
+        res = session.get(f"https://{domain}", timeout=REQUEST_TIMEOUT, allow_redirects=True)
+        if res.status_code in (403, 429, 503):
+            server = (res.headers.get('Server') or '').lower()
+            cfm = (res.headers.get('cf-mitigated') or '').lower()
+            head = (res.text or '')[:300]
+            if 'cloudflare' in server or cfm == 'yes' or 'just a moment' in head.lower():
+                return True
+    except Exception:
+        pass
+    return False
+
 
 def scrape_single_domain(domain, fast=False):
     try:
         domain = domain.strip().replace('https://', '').replace('http://', '').split('/')[0].strip()
         if not domain:
             return error_row(domain)
+        # دومين محظور من Cloudflare — موجود وشغال بس محتاج معالجة يدوية
+        if _cloudflare_blocked(domain):
+            bucket = {
+                'phones': set(), 'whatsapp': set(), 'emails': set(),
+                'socials': {k: set() for k in SOCIAL_NETWORKS},
+                'title': '', 'platform': 'غير معروف', 'active': True,
+            }
+            row = bucket_to_row(domain, bucket)
+            row['الحالة'] = 'محظور (Cloudflare)'
+            row['الزيارات الشهرية التقديرية'] = '0'
+            row['العوائد الشهرية التقديرية (SAR)'] = '0 SAR'
+            return row
         # fast: الرئيسية بس (اختيار سرعة) — الكامل: homepage + الداخلية + tranco
         bucket = harvest_domain(domain, fetch_url, max_pages=0 if fast else 5)
         row = bucket_to_row(domain, bucket)
 
-        rank = (None if fast else get_tranco_rank(domain)) if bucket['active'] else None
+        rank = None
+        if not fast and bucket['active']:
+            rank = get_tranco_rank(domain)
         visits, est_rev, _ = estimate_metrics(rank, row['منصة المتجر'], bucket['active'])
         row['الزيارات الشهرية التقديرية'] = f"{visits:,}"
         row['العوائد الشهرية التقديرية (SAR)'] = est_rev
@@ -421,18 +464,15 @@ with tab2:
 
 if domain_list:
     domain_list = [d.strip() for d in domain_list if d and d.strip()]
-
-    # نحمّل اللي خلص قبل كده (استئناف بعد أي قطع/Mوتة)
-    saved_rows = _load_done()
-    done_domains = {r.get('الموقع (Domain)') for r in saved_rows}
-    pending = [d for d in domain_list if d not in done_domains]
     total = len(domain_list)
 
-    resume_info = total - len(pending)
-    if resume_info > 0:
-        st.info(f"⬅️ تم فحص {resume_info} موقع في الجلسة السابقة — هتستأنف من حيث وقفت.")
+    # ── حالة الجلسة: تعيش عبر الـ reruns وتتوهج عند إعادة فتح المتصفح ──
+    if "domains_queue" not in st.session_state:
+        st.session_state.domains_queue = []
+        st.session_state.done_domains = set()
+        st.session_state.fast_mode = True
+        st.session_state.scan_started = False
 
-    st.markdown(f"### ⚙️ الروابط المجهزة للبدء: **{total} موقع** ({len(pending)} متبقيين)")
     scan_mode = st.radio(
         "⚡ سرعة الفحص:",
         [
@@ -441,44 +481,46 @@ if domain_list:
         ],
         horizontal=True,
     )
-    fast = scan_mode.startswith("سريع")
-    max_workers = min(10, total) if fast else min(6, total)
-    batch_size = 25 if fast else 15
+    st.session_state.fast_mode = scan_mode.startswith("سريع")
+    if not st.session_state.fast_mode and total > 100:
+        st.warning("⚠️ الوضع الشامل أبطأ على الدفعات الكبيرة — الأفضل دفعة أصغر (≤100) أو الوضع السريع.")
 
-    if st.button("🚀 بدء الاستخراج التلقائي الان") and pending:
-        progress_bar = st.progress(len(done_domains) / total)
-        status_text = st.empty()
-        status_text.info("⏳ جاري تحضير المحركات والبدء في الفحص... يرجى الانتظار (قد يستغرق فحص الموقع الأول بضع ثوانٍ)")
+    st.markdown(f"### ⚙️ الروابط الجاهزة: **{total} موقع**")
 
-        completed = len(done_domains)
+    if st.button("🚀 بدء الاستخراج التلقائي الآن"):
+        st.session_state.domains_queue = list(domain_list)
+        st.session_state.done_domains = {r.get('الموقع (Domain)') for r in _load_done() if r.get('الموقع (Domain)')}
+        st.session_state.scan_started = True
+        st.rerun()
 
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
-        try:
-            for start in range(0, len(pending), batch_size):
-                batch = pending[start:start + batch_size]
-                futures = {executor.submit(scrape_single_domain, dom, fast): dom for dom in batch}
-                for future in concurrent.futures.as_completed(futures):
-                    dom = futures[future]
-                    try:
-                        res = future.result()
-                    except Exception:
-                        res = error_row(dom)
-                    _save_row(res)  # يتخزن فوراً — لو الات عيط مفيش حاجة بتضيع
-                    completed += 1
-                    progress_bar.progress(completed / total)
-                    status_text.markdown(f"**جاري فحص وتدقيق ({completed}/{total}) موقع...**")
-                time.sleep(1)  # نفس بسيط بين الدفعات — يخفف الضغط على الشبكة
-        except Exception as e:
-            st.error(f"حدث خطأ غير متوقع أثناء الفحص: {e}")
-        finally:
-            # wait=False: لو المستخدم عمل ريفريش، مش هنستنى الشبكة كلها تخلص -> مفيش تعلق
-            executor.shutdown(wait=False, cancel_futures=True)
+    # ── المحرك الآلي: chunk واحد لكل rerun — يريّح الاتصال ويحدّث الـ UI فعلياً ──
+    if st.session_state.scan_started and st.session_state.domains_queue:
+        queue = st.session_state.domains_queue
+        done = st.session_state.done_domains
+        processed_so_far = sum(1 for d in queue if d in done)
 
-        all_rows = _load_done()
-        st.session_state['partial_results'] = all_rows
+        st.progress(min(processed_so_far / total, 1.0))
+        st.markdown(f"**تم فحص {processed_so_far} من {total}**")
 
-        st.balloons()
-        st.success(f"🎉 اكتمل فحص واكتشاف {len(all_rows)} موقع بنجاح!")
+        pending = [d for d in queue if d not in done]
+        if pending:
+            chunk = pending[:CHUNK_SIZE]
+            with st.spinner(f"جاري فحص {processed_so_far + 1} إلى {min(processed_so_far + len(chunk), total)}..."):
+                # with pool عادي جوه الـ chunk = لا threads معلقة بعد الختام (لا leak)
+                with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                    futures = {executor.submit(scrape_single_domain, d, st.session_state.fast_mode): d for d in chunk}
+                    for future in concurrent.futures.as_completed(futures):
+                        d = futures[future]
+                        try:
+                            res = future.result()
+                        except Exception:
+                            res = error_row(d)
+                        _save_row(res)  # يتخزن فوراً — لو الات عيط مفيش حاجة بتضيع
+                        done.add(d)
+            st.rerun()   # نفَس جديد للـ WebSocket — هون سر التغلب على idle timeout
+        else:
+            st.balloons()
+            st.success(f"🎉 اكتمل فحص واكتشاف {processed_so_far} موقع بنجاح!")
 
 # ---------------------------------------------------------------------------
 # عرض النتائج المحفوظة (من الجلسة الحالية أو الجلسات السابقة — من القرص)

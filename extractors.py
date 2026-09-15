@@ -359,10 +359,12 @@ def discover_pages(soup: BeautifulSoup, domain: str, limit: int = 5) -> list:
 # 7) الدالة الرئيسية — تجمع كل حاجة من كل الصفحات
 # ---------------------------------------------------------------------------
 
-def harvest_domain(domain: str, fetch_url, max_pages: int = 5) -> dict:
+def harvest_domain(domain: str, fetch_url, max_pages: int = 5, parallel: bool = False) -> dict:
     """
     fetch_url: دالة بترجّع response أو None (نفس الموجودة عندك في app.py)
     بترجّع dict فيه كل اللي اتجمع من الهوم بيدج + الصفحات الداخلية.
+    parallel=True: يجريب كل المتغيرات (https/www/ar/http) موازي وياخد أول 200
+    — للدومينات الميتة/الـ 404 بيوفر من 5×timeout تسلسلي إلى timeout واحد.
     """
     bucket = {
         'phones': set(), 'whatsapp': set(), 'emails': set(),
@@ -370,12 +372,28 @@ def harvest_domain(domain: str, fetch_url, max_pages: int = 5) -> dict:
         'title': '', 'platform': 'غير معروف', 'active': False,
     }
 
+    candidates = (f"https://{domain}/ar", f"https://www.{domain}/ar",
+                  f"https://{domain}", f"https://www.{domain}", f"http://{domain}")
+
     res = None
-    for url in (f"https://{domain}/ar", f"https://www.{domain}/ar",
-                f"https://{domain}", f"https://www.{domain}", f"http://{domain}"):
-        res = fetch_url(url)
-        if res is not None and res.status_code == 200:
-            break
+    if parallel and len(candidates) > 1:
+        import concurrent.futures as _cf
+        _ex = _cf.ThreadPoolExecutor(max_workers=len(candidates))
+        try:
+            _futs = {_ex.submit(fetch_url, u): u for u in candidates}
+            for _f in _cf.as_completed(_futs):
+                _r = _f.result()
+                if _r is not None and _r.status_code == 200:
+                    res = _r
+                    break
+        finally:
+            # wait=False: منغيش نستنّى كل المحاولات — أول 200 يربح والباقي يتلغي
+            _ex.shutdown(wait=False, cancel_futures=True)
+    else:
+        for url in candidates:
+            res = fetch_url(url)
+            if res is not None and res.status_code == 200:
+                break
     if res is None:
         return bucket
 
