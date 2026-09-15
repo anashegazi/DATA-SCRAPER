@@ -22,9 +22,16 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 RESULTS_FILE = 'partial_results.jsonl'
 _lock = threading.Lock()
 
+USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+]
+
 # ── ضبط سرعة وأداء الفحص ──
-MAX_WORKERS = 20       # عدد العمال المتزامنين
-REQUEST_TIMEOUT = (2.5, 3.5)  # مهلة الطلب (اتصال 2.5 ثانية، قراءة 3.5 ثانية)
+MAX_WORKERS = 6          # عدد العمال المتزامنين المناسب لعدم إثارة حماية Cloudflare (429)
+CHUNK_SIZE = 10          # حجم الدفعة لكل تحديث شاشة وتنشيط الاتصال
+REQUEST_TIMEOUT = (3.0, 5.0)  # مهلة الطلب (اتصال 3 ثواني، قراءة 5 ثواني)
 
 def normalize_domain(url):
     url = str(url).strip()
@@ -273,69 +280,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-USER_AGENTS = [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
-]
-
-def get_tranco_rank(domain):
-    try:
-        r = requests.get(f"https://tranco-list.eu/api/ranks/domain/{domain}", timeout=3)
-        if r.status_code == 200:
-            data = r.json()
-            ranks = data.get('ranks', [])
-            if ranks:
-                return ranks[0].get('rank')
-    except Exception:
-        pass
-    return None
-
-def estimate_metrics(tranco_rank, platform, is_active):
-    if not is_active:
-        return 0, "0 SAR", "غير نشط"
-        
-    if tranco_rank and tranco_rank > 0:
-        monthly_visits = int(100_000_000_000 / (tranco_rank ** 1.12))
-        monthly_visits = max(monthly_visits, 800)
-    else:
-        # مواقع خارج تصنيف Tranco (صغيرة جداً أو جديدة)
-        base = 800 if any(p in platform for p in ['Salla', 'Zid', 'Shopify', 'WooCommerce', 'سلة', 'زد']) else 300
-        # نضيف القليل من العشوائية حتى لا تبدو الأرقام كلها ثابتة
-        monthly_visits = base + random.randint(10, 450)
-
-    if any(p in platform for p in ['Salla', 'Zid', 'Shopify', 'WooCommerce', 'سلة', 'زد']):
-        rev_min = int(monthly_visits * 0.01 * 100)
-        rev_max = int(monthly_visits * 0.02 * 180)
-        rev_str = f"{rev_min:,} - {rev_max:,} SAR"
-    else:
-        rev_min = int((monthly_visits / 1000) * 15)
-        rev_max = int((monthly_visits / 1000) * 45)
-        rev_str = f"{rev_min:,} - {rev_max:,} SAR"
-        
-    return monthly_visits, rev_str, "نشط"
-
-def clean_phone(phone):
-    phone = re.sub(r'[^\d+]', '', phone)
-    if phone.startswith('00966'):
-        phone = '+' + phone[2:]
-    elif phone.startswith('966'):
-        phone = '+' + phone
-    elif phone.startswith('05') and len(phone) == 10:
-        phone = '+966' + phone[1:]
-    return phone
-
-def is_valid_phone(phone):
-    clean = re.sub(r'[^\d+]', '', phone)
-    if clean.startswith('+9665') and len(clean) in [13, 14]:
-        return True
-    if clean.startswith('05') and len(clean) in [10, 11]:
-        return True
-    if clean.startswith('9200') and len(clean) == 9:
-        return True
-    if clean.startswith('800') and len(clean) in [9, 10]:
-        return True
-    return False
-
 def fetch_url(url, retries=1):
     session = _get_session()
     for attempt in range(retries):
@@ -343,13 +287,9 @@ def fetch_url(url, retries=1):
             res = session.get(url, timeout=REQUEST_TIMEOUT, allow_redirects=True)
             if res is None:
                 continue
-            # fast-fail: Cloudflare challenge → تخطي فوري للدومين بالكامل
-            if res.status_code in (403, 429, 503):
-                server = (res.headers.get('Server') or '').lower()
-                cfm = (res.headers.get('cf-mitigated') or '').lower()
-                head = (res.text or '')[:300].lower()
-                if 'cloudflare' in server or cfm == 'yes' or 'just a moment' in head:
-                    return 'CLOUDFLARE_BLOCKED'
+            text_head = (res.text or '')[:300]
+            if 'Just a moment' in text_head or 'التحقق البشري | Salla' in (res.text or '')[:2000]:
+                return None
             if res.status_code == 200 and len(res.text) > 300:
                 return res
         except Exception:
@@ -357,15 +297,13 @@ def fetch_url(url, retries=1):
     return None
 
 
-
-
 def scrape_single_domain(domain):
     try:
-        domain = domain.strip().replace('https://', '').replace('http://', '').split('/')[0].strip()
+        domain = normalize_domain(domain)
         if not domain:
             return error_row(domain)
-        # فحص شامل دائم: الصفحة الرئيسية + الصفحات الداخلية (اتصل بنا / من نحن)
-        bucket = harvest_domain(domain, fetch_url, max_pages=5)
+        # فحص شامل: الصفحة الرئيسية + الصفحات الداخلية (اتصل بنا / من نحن)
+        bucket = harvest_domain(domain, fetch_url, max_pages=3)
         row = bucket_to_row(domain, bucket)
         # الأعمدة موجودة وفارغة ليتم ملؤها يدوياً
         row['الزيارات الشهرية التقديرية'] = ''
@@ -460,20 +398,26 @@ if domain_list:
         st.session_state.scan_started = True
         st.rerun()
 
-    # ── المحرك الآلي: فحص متوازي وتحديث مباشر لعداد التقدم لكل موقع ──
+    # ── المحرك الآلي: معالجة بنظام الدفعات (Chunks) وتحديث حي ومباشر للـ UI ──
     if st.session_state.scan_started and st.session_state.domains_queue:
         queue = st.session_state.domains_queue
         done = st.session_state.done_domains
         pending = [d for d in queue if d not in done]
         total = len(queue)
+        completed_count = len(done)
 
-        progress_bar = st.progress(min(len(done) / total, 1.0) if total else 0.0)
+        progress_val = min(completed_count / total, 1.0) if total else 0.0
+        progress_bar = st.progress(progress_val)
         status_box = st.empty()
 
         if pending:
-            status_box.markdown(f"**⚡ جاري الفحص المتوازي... (تم إنجاز {len(done)} من {total})**")
+            chunk = pending[:CHUNK_SIZE]
+            chunk_start = completed_count + 1
+            chunk_end = min(completed_count + len(chunk), total)
+            status_box.markdown(f"**⚡ جاري فحص المواقع ({chunk_start} إلى {chunk_end} من أصل {total})...**")
+
             with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-                futures = {executor.submit(scrape_single_domain, d): d for d in pending}
+                futures = {executor.submit(scrape_single_domain, d): d for d in chunk}
                 for future in concurrent.futures.as_completed(futures):
                     d = futures[future]
                     try:
@@ -485,13 +429,14 @@ if domain_list:
                     count_done = len(done)
                     progress_bar.progress(min(count_done / total, 1.0))
                     status_box.markdown(f"**⚡ المكتمل: {count_done} / {total} موقع | أحدث موقع: `{d}`**")
-            st.session_state.scan_started = False
-            st.balloons()
-            st.success(f"🎉 اكتمل فحص واكتشاف {len(done)} موقع بنجاح!")
+
+            # تحديث الواجهة تلقائياً للدفعة التالية (يمنع انقطاع الاتصال وتجمد المتصفح)
             st.rerun()
         else:
+            st.session_state.scan_started = False
+            status_box.markdown(f"**✅ اكتمل الفحص بالكامل ({total} موقع)!**")
             st.balloons()
-            st.success(f"🎉 تم فحص جميع المواقع ({len(done)} من {total}) مسبقاً!")
+            st.success(f"🎉 تم استخراج واكتشاف بيانات {total} موقع بنجاح!")
 
 # ---------------------------------------------------------------------------
 # عرض النتائج المحفوظة (من الجلسة الحالية أو الجلسات السابقة — من القرص)

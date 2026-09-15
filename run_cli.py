@@ -64,11 +64,10 @@ def fetch_url(url):
         res = session.get(url, timeout=TIMEOUT, allow_redirects=True)
         if res is None:
             return None
-        # Cloudflare JS challenge: "Just a moment..."
-        if res.status_code in (403, 429, 503):
-            ct = res.headers.get('Server', '').lower()
-            if 'cloudflare' in ct or 'Just a moment' in (res.text[:200] if res.text else ''):
-                return 'CLOUDFLARE_BLOCKED'
+        # تجاهل صفحات الكابتشا والتحقق البشري
+        text_head = (res.text or '')[:300]
+        if 'Just a moment' in text_head or 'التحقق البشري | Salla' in (res.text or '')[:2000]:
+            return None
         if res.status_code == 200 and len(res.text) > 300:
             return res
     except Exception:
@@ -77,39 +76,11 @@ def fetch_url(url):
 
 
 def get_tranco_rank(domain):
-    try:
-        r = requests.get(f"https://tranco-list.eu/api/ranks/domain/{domain}", timeout=3)
-        if r.status_code == 200:
-            data = r.json()
-            ranks = data.get('ranks', [])
-            if ranks:
-                return ranks[0].get('rank')
-    except Exception:
-        pass
     return None
 
 
 def estimate_metrics(tranco_rank, platform, is_active):
-    if not is_active:
-        return 0, "0 SAR", "غير نشط"
-
-    if tranco_rank and tranco_rank > 0:
-        monthly_visits = int(100_000_000_000 / (tranco_rank ** 1.12))
-        monthly_visits = max(monthly_visits, 800)
-    else:
-        base = 800 if any(p in platform for p in ['Salla', 'Zid', 'Shopify', 'WooCommerce', 'سلة', 'زد']) else 300
-        monthly_visits = base + random.randint(10, 450)
-
-    if any(p in platform for p in ['Salla', 'Zid', 'Shopify', 'WooCommerce', 'سلة', 'زد']):
-        rev_min = int(monthly_visits * 0.01 * 100)
-        rev_max = int(monthly_visits * 0.02 * 180)
-        rev_str = f"{rev_min:,} - {rev_max:,} SAR"
-    else:
-        rev_min = int((monthly_visits / 1000) * 15)
-        rev_max = int((monthly_visits / 1000) * 45)
-        rev_str = f"{rev_min:,} - {rev_max:,} SAR"
-
-    return monthly_visits, rev_str, "نشط"
+    return "", "", "نشط" if is_active else "غير متاح"
 
 
 def error_row(domain):
@@ -124,9 +95,9 @@ def error_row(domain):
     return row
 
 
-def scrape_worker(domain, use_parallel=False):
+def scrape_worker(domain):
     try:
-        bucket = harvest_domain(domain, fetch_url, max_pages=5, parallel=use_parallel)
+        bucket = harvest_domain(domain, fetch_url, max_pages=3)
         row = bucket_to_row(domain, bucket)
         # الأعمدة موجودة وفارغة ليتم ملؤها يدوياً
         row['الزيارات الشهرية التقديرية'] = ''
@@ -199,17 +170,14 @@ def main():
     p = argparse.ArgumentParser(description='سكرابر المتاجر — بلا واجهة')
     p.add_argument('--links', required=True, help='ملف txt فيه الروابط (سطر لكل رابط)')
     p.add_argument('--fast', action='store_true', help='الوضع السريع: الرئيسية فقط (بدون ترافيك)')
-    p.add_argument('--workers', type=int, default=50, help='عدد العمال المتزامنين (افتراضي 50)')
+    p.add_argument('--workers', type=int, default=6, help='عدد العمال المتزامنين (افتراضي 6)')
     p.add_argument('--timeout', type=float, default=5.0, help='مهلة الطلب بالثواني (افتراضي 5)')
-    p.add_argument('--parallel', action='store_true', help='تفعيل الجرب الموازي للعناوين (قد يسبب حظر Cloudflare)')
     p.add_argument('--out-dir', default='.', help='مجلد حفظ النتائج')
     p.add_argument('--fresh', action='store_true', help='تجاهل النتائج المحفوظة والبدء من الأول')
     args = p.parse_args()
 
     global TIMEOUT
     TIMEOUT = args.timeout
-    fast = args.fast
-    use_parallel = args.parallel
 
     if not os.path.exists(args.links):
         print(f'[!] الملف غير موجود: {args.links}')
@@ -242,7 +210,7 @@ def main():
     if pending:
         with tqdm(total=len(pending), desc='فحص', unit='موقع', bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]') as bar:
             with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as executor:
-                futures = {executor.submit(scrape_worker, d, use_parallel): d for d in pending}
+                futures = {executor.submit(scrape_worker, d): d for d in pending}
                 try:
                     for future in concurrent.futures.as_completed(futures):
                         d = futures[future]

@@ -19,13 +19,14 @@ from bs4 import BeautifulSoup
 
 ARABIC_DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789")
 
-# أرقام مش هواتف: سجل تجاري، ضريبي، IBAN، تواريخ، إحداثيات
+# أرقام مش هواتف: سجل تجاري، ضريبي، IBAN، تواريخ، إحداثيات، وأرقام وهمية
 JUNK_PATTERNS = [
     r'^\d{15}$',          # الرقم الضريبي السعودي
     r'^\d{10}$',          # ممكن يكون سجل تجاري — بنسمح بيه بس لو بادئ بـ 05
     r'^(19|20)\d{2}$',    # سنوات
     r'^0{4,}',
     r'^1{6,}|^2{6,}|^3{6,}|^9{6,}',  # أرقام مكررة (placeholders)
+    r'^(966)?123456789\d*$',         # أرقام تجريبية افتراضية في قوالب المنصات
 ]
 
 
@@ -314,6 +315,8 @@ def extract_emails(raw_html: str, soup: BeautifulSoup) -> set:
             low = em.lower()
             if low.endswith(BAD_EXT):
                 continue
+            if any(p in low for p in ('salla.sa', 'zid.sa', 'schema.org', 'w3.org', 'example.com', 'domain.com', 'yourstore')):
+                continue
             if re.search(r'\.{2,}|@.*@|^(test|admin|example|fake|email|user|name)@|sentry|wixpress|\.wp\.com', low):
                 continue
             emails.add(em.strip('.'))
@@ -359,12 +362,10 @@ def discover_pages(soup: BeautifulSoup, domain: str, limit: int = 5) -> list:
 # 7) الدالة الرئيسية — تجمع كل حاجة من كل الصفحات
 # ---------------------------------------------------------------------------
 
-def harvest_domain(domain: str, fetch_url, max_pages: int = 5, parallel: bool = False) -> dict:
+def harvest_domain(domain: str, fetch_url, max_pages: int = 3) -> dict:
     """
-    fetch_url: دالة بترجّع response أو None (نفس الموجودة عندك في app.py)
-    بترجّع dict فيه كل اللي اتجمع من الهوم بيدج + الصفحات الداخلية.
-    parallel=True: يجريب كل المتغيرات (https/www/ar/http) موازي وياخد أول 200
-    — للدومينات الميتة/الـ 404 بيوفر من 5×timeout تسلسلي إلى timeout واحد.
+    fetch_url: دالة ترجع response أو None.
+    تجمع كل البيانات من الصفحة الرئيسية + الصفحات الداخلية (اتصل بنا / من نحن).
     """
     bucket = {
         'phones': set(), 'whatsapp': set(), 'emails': set(),
@@ -372,34 +373,21 @@ def harvest_domain(domain: str, fetch_url, max_pages: int = 5, parallel: bool = 
         'title': '', 'platform': 'غير معروف', 'active': False,
     }
 
-    candidates = (f"https://{domain}", f"https://www.{domain}",
-                  f"https://{domain}/ar", f"https://www.{domain}/ar", f"http://{domain}")
+    candidates = (
+        f"https://{domain}",
+        f"https://www.{domain}",
+        f"https://{domain}/ar",
+        f"http://{domain}"
+    )
 
     res = None
-    if parallel and len(candidates) > 1:
-        import concurrent.futures as _cf
-        _ex = _cf.ThreadPoolExecutor(max_workers=len(candidates))
-        try:
-            _futs = {_ex.submit(fetch_url, u): u for u in candidates}
-            for _f in _cf.as_completed(_futs):
-                _r = _f.result()
-                if _r is not None and _r.status_code == 200:
-                    res = _r
-                    break
-        finally:
-            # wait=False: منغيش نستنّى كل المحاولات — أول 200 يربح والباقي يتلغي
-            _ex.shutdown(wait=False, cancel_futures=True)
-    else:
-        for url in candidates:
-            res = fetch_url(url)
-            if res == 'CLOUDFLARE_BLOCKED':
-                bucket['title'] = 'محظور (حماية Cloudflare)'
-                bucket['platform'] = 'غير معروف (Cloudflare)'
-                bucket['active'] = False
-                return bucket
-            if res is not None and getattr(res, 'status_code', None) == 200:
-                break
-    if res is None or res == 'CLOUDFLARE_BLOCKED':
+    for url in candidates:
+        r = fetch_url(url)
+        if r is not None and getattr(r, 'status_code', None) == 200:
+            res = r
+            break
+
+    if res is None:
         return bucket
 
     bucket['active'] = True
@@ -431,14 +419,12 @@ def harvest_domain(domain: str, fetch_url, max_pages: int = 5, parallel: bool = 
 
     absorb(home_html)
 
-    # جلب الصفحات الداخلية بالتوازي لتوفير الوقت
+    # جلب الصفحات الداخلية المهمة تسلسلياً (اتصل بنا / من نحن)
     inner_urls = discover_pages(home_soup, domain, limit=max_pages)
-    if inner_urls:
-        import concurrent.futures as _cf
-        with _cf.ThreadPoolExecutor(max_workers=min(len(inner_urls), 5)) as _inner_ex:
-            for page in _inner_ex.map(fetch_url, inner_urls):
-                if page is not None and getattr(page, 'status_code', None) == 200:
-                    absorb(page.text)
+    for page_url in inner_urls:
+        page = fetch_url(page_url)
+        if page is not None and getattr(page, 'status_code', None) == 200:
+            absorb(page.text)
 
     return bucket
 
