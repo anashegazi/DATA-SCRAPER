@@ -335,15 +335,16 @@ def fetch_url(url, retries=1):
             pass
     return None
 
-def scrape_single_domain(domain):
+def scrape_single_domain(domain, fast=False):
     try:
         domain = domain.strip().replace('https://', '').replace('http://', '').split('/')[0].strip()
         if not domain:
             return error_row(domain)
-        bucket = harvest_domain(domain, fetch_url, max_pages=5)
+        # fast: الرئيسية بس (اختيار سرعة) — الكامل: homepage + الداخلية + tranco
+        bucket = harvest_domain(domain, fetch_url, max_pages=0 if fast else 5)
         row = bucket_to_row(domain, bucket)
 
-        rank = get_tranco_rank(domain) if bucket['active'] else None
+        rank = (None if fast else get_tranco_rank(domain)) if bucket['active'] else None
         visits, est_rev, _ = estimate_metrics(rank, row['منصة المتجر'], bucket['active'])
         row['الزيارات الشهرية التقديرية'] = f"{visits:,}"
         row['العوائد الشهرية التقديرية (SAR)'] = est_rev
@@ -432,20 +433,30 @@ if domain_list:
         st.info(f"⬅️ تم فحص {resume_info} موقع في الجلسة السابقة — هتستأنف من حيث وقفت.")
 
     st.markdown(f"### ⚙️ الروابط المجهزة للبدء: **{total} موقع** ({len(pending)} متبقيين)")
+    scan_mode = st.radio(
+        "⚡ سرعة الفحص:",
+        [
+            "سريع — الرئيسية فقط (الأسرع، بدون تقديرات ترافيك)",
+            "شامل — الرئيسية + صفحات اتصل/من-نحن + تقديرات ترافيك",
+        ],
+        horizontal=True,
+    )
+    fast = scan_mode.startswith("سريع")
+    max_workers = min(10, total) if fast else min(6, total)
+    batch_size = 25 if fast else 15
+
     if st.button("🚀 بدء الاستخراج التلقائي الان") and pending:
         progress_bar = st.progress(len(done_domains) / total)
         status_text = st.empty()
         status_text.info("⏳ جاري تحضير المحركات والبدء في الفحص... يرجى الانتظار (قد يستغرق فحص الموقع الأول بضع ثوانٍ)")
 
         completed = len(done_domains)
-        max_workers = min(6, total)
-        batch_size = 15  # نتك في دفعات عشان متبقيش حاجة كبيرة بانتظار في الذاكرة
 
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
         try:
             for start in range(0, len(pending), batch_size):
                 batch = pending[start:start + batch_size]
-                futures = {executor.submit(scrape_single_domain, dom): dom for dom in batch}
+                futures = {executor.submit(scrape_single_domain, dom, fast): dom for dom in batch}
                 for future in concurrent.futures.as_completed(futures):
                     dom = futures[future]
                     try:
