@@ -173,8 +173,8 @@ def extract_whatsapp(raw_html: str, phones: set) -> set:
     for m in re.findall(r'https?://chat\.whatsapp\.com/[A-Za-z0-9]+', raw):
         links.add(m)
     
-    # استخراج رقم الواتساب إذا كان مخزناً كنص في JSON (مثل منصة سلة)
-    for m in re.findall(r'"(?:whatsapp|whats_app|whatsapp_number)"\s*:\s*"([^"]{6,40})"', raw, re.I):
+    # استخراج رقم الواتساب إذا كان مخزناً كنص في JSON أو كـ mobile (مثل منصات سلة وتطبيقات BusinessChat)
+    for m in re.findall(r'"(?:whatsapp|whats_app|whatsapp_number|mobile|phone)"\s*:\s*"([^"]{6,40})"', raw, re.I):
         cp = clean_phone(m)
         if is_valid_phone(cp):
             links.add(f"https://wa.me/{cp.lstrip('+')}")
